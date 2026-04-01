@@ -1,0 +1,15 @@
+Binaries/
+DerivedDataCache/
+Intermediate/
+Saved/
+.vs/
+*.sln
+*.VC.db
+*.VC.opendb
+FileOpenOrder/
+Obj/
+Build/
+Plugins/*/Binaries/
+Plugins/*/Intermediate/
+Collections/
+Developers/
