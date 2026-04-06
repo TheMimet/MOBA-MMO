@@ -13,3 +13,11 @@ Plugins/*/Binaries/
 Plugins/*/Intermediate/
 Collections/
 Developers/
+server/node_modules/
+server/dist/
+server/.env
+server/generated/
+server/src/generated/
+server/.postgres-data/
+server/.postgres-log/
+server/.pgpass
