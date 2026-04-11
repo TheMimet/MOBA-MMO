@@ -85,6 +85,8 @@ class MOBAMMO_API UMOBAMMOBackendSubsystem : public UGameInstanceSubsystem
     GENERATED_BODY()
 
 public:
+    UMOBAMMOBackendSubsystem();
+
     UPROPERTY(BlueprintAssignable, Category="Backend")
     FBackendLoginSuccessSignature OnLoginSucceeded;
 
@@ -127,15 +129,34 @@ public:
     UFUNCTION(BlueprintPure, Category="Backend")
     FString GetLastSessionConnectString() const { return LastSessionConnectString; }
 
+    UFUNCTION(BlueprintPure, Category="Backend|Debug")
+    FString GetLoginStatus() const { return LoginStatus; }
+
+    UFUNCTION(BlueprintPure, Category="Backend|Debug")
+    FString GetCharacterStatus() const { return CharacterStatus; }
+
+    UFUNCTION(BlueprintPure, Category="Backend|Debug")
+    FString GetSessionStatus() const { return SessionStatus; }
+
+    UFUNCTION(BlueprintPure, Category="Backend|Debug")
+    FString GetLastErrorMessage() const { return LastErrorMessage; }
+
+    UFUNCTION(BlueprintPure, Category="Backend|Debug")
+    FString GetLastUsername() const { return LastUsername; }
+
 private:
     using FHttpResponseHandle = TSharedPtr<IHttpResponse, ESPMode::ThreadSafe>;
 
     FString LastAccountId;
     FString LastCharacterId;
     FString LastSessionConnectString;
+    FString LastErrorMessage;
+    FString LastUsername;
+    FString LoginStatus;
+    FString CharacterStatus;
+    FString SessionStatus;
 
     FString BuildUrl(const FString& Path) const;
-    TSharedPtr<FJsonObject> BuildJsonObject(const TFunctionRef<void(TSharedRef<FJsonObject>)>& Builder) const;
     bool TryReadJsonResponse(FHttpResponseHandle Response, TSharedPtr<FJsonObject>& OutObject, FString& OutError) const;
     FString BuildErrorMessage(FHttpResponseHandle Response, const FString& FallbackMessage) const;
 };

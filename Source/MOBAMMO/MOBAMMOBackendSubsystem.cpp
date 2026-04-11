@@ -11,18 +11,9 @@
 #include "Serialization/JsonReader.h"
 #include "Serialization/JsonSerializer.h"
 #include "Async/Async.h"
-#include "Engine/Engine.h"
 
 namespace
 {
-    void DebugScreen(const FString& Message, const FColor Color = FColor::Cyan, const float Duration = 5.0f)
-    {
-        if (GEngine)
-        {
-            GEngine->AddOnScreenDebugMessage(-1, Duration, Color, Message);
-        }
-    }
-
     FString NormalizeBaseUrl(const FString& Url)
     {
         FString Result = Url;
@@ -57,6 +48,24 @@ namespace
     {
         AsyncTask(ENamedThreads::GameThread, MoveTemp(Callback));
     }
+
+    bool ShouldSkipAutomaticBackendBootstrap(const UGameInstanceSubsystem* Subsystem)
+    {
+        if (!Subsystem)
+        {
+            return false;
+        }
+
+        const UWorld* World = Subsystem->GetWorld();
+        if (!World)
+        {
+            return false;
+        }
+
+        // After the client joins the dedicated server, the replicated client world
+        // should not restart the local mock login -> create character -> session flow.
+        return World->GetNetMode() == NM_Client;
+    }
 }
 
 FString UMOBAMMOBackendSubsystem::GetBackendBaseUrl() const
@@ -64,18 +73,35 @@ FString UMOBAMMOBackendSubsystem::GetBackendBaseUrl() const
     return NormalizeBaseUrl(GetDefault<UMOBAMMOBackendConfig>()->BackendBaseUrl);
 }
 
+UMOBAMMOBackendSubsystem::UMOBAMMOBackendSubsystem()
+    : LoginStatus(TEXT("Idle"))
+    , CharacterStatus(TEXT("Idle"))
+    , SessionStatus(TEXT("Idle"))
+{
+}
+
 void UMOBAMMOBackendSubsystem::MockLogin(const FString& Username)
 {
+    if (ShouldSkipAutomaticBackendBootstrap(this))
+    {
+        UE_LOG(LogTemp, Log, TEXT("[Backend] MockLogin skipped because world is already a network client."));
+        return;
+    }
+
     const FString TrimmedUsername = Username.TrimStartAndEnd();
     if (TrimmedUsername.IsEmpty())
     {
+        LastErrorMessage = TEXT("Username gereklidir.");
+        LoginStatus = TEXT("Failed");
         OnLoginFailed.Broadcast(TEXT("Username gereklidir."));
         return;
     }
 
+    LastUsername = TrimmedUsername;
+    LastErrorMessage.Reset();
+    LoginStatus = TEXT("LoggingIn");
     const FString LoginUrl = BuildUrl(TEXT("/auth/login"));
     UE_LOG(LogTemp, Log, TEXT("[Backend] MockLogin starting. Username=%s Url=%s"), *TrimmedUsername, *LoginUrl);
-    DebugScreen(FString::Printf(TEXT("Backend URL: %s"), *GetBackendBaseUrl()));
 
     TSharedRef<IHttpRequest, ESPMode::ThreadSafe> Request = FHttpModule::Get().CreateRequest();
     Request->SetURL(LoginUrl);
@@ -97,6 +123,8 @@ void UMOBAMMOBackendSubsystem::MockLogin(const FString& Username)
                 UE_LOG(LogTemp, Error, TEXT("[Backend] %s"), *FailureMessage);
                 RunOnGameThread([this]()
                 {
+                    LastErrorMessage = TEXT("Login istegi basarisiz oldu.");
+                    LoginStatus = TEXT("Failed");
                     OnLoginFailed.Broadcast(TEXT("Login istegi basarisiz oldu."));
                 });
                 return;
@@ -112,6 +140,8 @@ void UMOBAMMOBackendSubsystem::MockLogin(const FString& Username)
                     *Response->GetContentAsString());
                 RunOnGameThread([this, ErrorMessage]()
                 {
+                    LastErrorMessage = ErrorMessage;
+                    LoginStatus = TEXT("Failed");
                     OnLoginFailed.Broadcast(ErrorMessage);
                 });
                 return;
@@ -127,6 +157,7 @@ void UMOBAMMOBackendSubsystem::MockLogin(const FString& Username)
 
             RunOnGameThread([this, Result]()
             {
+                LoginStatus = TEXT("Succeeded");
                 OnLoginSucceeded.Broadcast(Result);
             });
         }
@@ -136,6 +167,8 @@ void UMOBAMMOBackendSubsystem::MockLogin(const FString& Username)
     UE_LOG(LogTemp, Log, TEXT("[Backend] MockLogin ProcessRequest returned %s"), bRequestStarted ? TEXT("true") : TEXT("false"));
     if (!bRequestStarted)
     {
+        LastErrorMessage = TEXT("Login istegi baslatilamadi.");
+        LoginStatus = TEXT("Failed");
         OnLoginFailed.Broadcast(TEXT("Login istegi baslatilamadi."));
     }
 }
@@ -148,16 +181,22 @@ void UMOBAMMOBackendSubsystem::CreateCharacter(const FString& AccountId, const F
 
     if (TrimmedAccountId.IsEmpty())
     {
+        LastErrorMessage = TEXT("AccountId gereklidir.");
+        CharacterStatus = TEXT("Failed");
         OnCharacterCreateFailed.Broadcast(TEXT("AccountId gereklidir."));
         return;
     }
 
     if (TrimmedCharacterName.IsEmpty())
     {
+        LastErrorMessage = TEXT("Karakter adi gereklidir.");
+        CharacterStatus = TEXT("Failed");
         OnCharacterCreateFailed.Broadcast(TEXT("Karakter adi gereklidir."));
         return;
     }
 
+    LastErrorMessage.Reset();
+    CharacterStatus = TEXT("Creating");
     UE_LOG(LogTemp, Log, TEXT("[Backend] CreateCharacter starting. AccountId=%s CharacterName=%s ClassId=%s"),
         *TrimmedAccountId,
         *TrimmedCharacterName,
@@ -187,6 +226,8 @@ void UMOBAMMOBackendSubsystem::CreateCharacter(const FString& AccountId, const F
                     HttpRequest.IsValid() ? *HttpRequest->GetURL() : TEXT("<invalid request>"));
                 RunOnGameThread([this]()
                 {
+                    LastErrorMessage = TEXT("Karakter olusturma istegi basarisiz oldu.");
+                    CharacterStatus = TEXT("Failed");
                     OnCharacterCreateFailed.Broadcast(TEXT("Karakter olusturma istegi basarisiz oldu."));
                 });
                 return;
@@ -202,6 +243,8 @@ void UMOBAMMOBackendSubsystem::CreateCharacter(const FString& AccountId, const F
                     *Response->GetContentAsString());
                 RunOnGameThread([this, ErrorMessage]()
                 {
+                    LastErrorMessage = ErrorMessage;
+                    CharacterStatus = TEXT("Failed");
                     OnCharacterCreateFailed.Broadcast(ErrorMessage);
                 });
                 return;
@@ -220,6 +263,7 @@ void UMOBAMMOBackendSubsystem::CreateCharacter(const FString& AccountId, const F
 
             RunOnGameThread([this, Result]()
             {
+                CharacterStatus = TEXT("Succeeded");
                 OnCharacterCreated.Broadcast(Result);
             });
         }
@@ -234,10 +278,14 @@ void UMOBAMMOBackendSubsystem::StartSession(const FString& CharacterId)
     const FString TrimmedCharacterId = CharacterId.TrimStartAndEnd();
     if (TrimmedCharacterId.IsEmpty())
     {
+        LastErrorMessage = TEXT("CharacterId gereklidir.");
+        SessionStatus = TEXT("Failed");
         OnSessionStartFailed.Broadcast(TEXT("CharacterId gereklidir."));
         return;
     }
 
+    LastErrorMessage.Reset();
+    SessionStatus = TEXT("Starting");
     UE_LOG(LogTemp, Log, TEXT("[Backend] StartSession starting. CharacterId=%s"), *TrimmedCharacterId);
 
     TSharedRef<IHttpRequest, ESPMode::ThreadSafe> Request = FHttpModule::Get().CreateRequest();
@@ -257,6 +305,8 @@ void UMOBAMMOBackendSubsystem::StartSession(const FString& CharacterId)
                     HttpRequest.IsValid() ? *HttpRequest->GetURL() : TEXT("<invalid request>"));
                 RunOnGameThread([this]()
                 {
+                    LastErrorMessage = TEXT("Session baslatma istegi basarisiz oldu.");
+                    SessionStatus = TEXT("Failed");
                     OnSessionStartFailed.Broadcast(TEXT("Session baslatma istegi basarisiz oldu."));
                 });
                 return;
@@ -272,6 +322,8 @@ void UMOBAMMOBackendSubsystem::StartSession(const FString& CharacterId)
                     *Response->GetContentAsString());
                 RunOnGameThread([this, ErrorMessage]()
                 {
+                    LastErrorMessage = ErrorMessage;
+                    SessionStatus = TEXT("Failed");
                     OnSessionStartFailed.Broadcast(ErrorMessage);
                 });
                 return;
@@ -283,6 +335,8 @@ void UMOBAMMOBackendSubsystem::StartSession(const FString& CharacterId)
             {
                 RunOnGameThread([this]()
                 {
+                    LastErrorMessage = TEXT("Session yaniti eksik veya gecersiz.");
+                    SessionStatus = TEXT("Failed");
                     OnSessionStartFailed.Broadcast(TEXT("Session yaniti eksik veya gecersiz."));
                 });
                 return;
@@ -307,6 +361,7 @@ void UMOBAMMOBackendSubsystem::StartSession(const FString& CharacterId)
 
             RunOnGameThread([this, Result]()
             {
+                SessionStatus = TEXT("Ready");
                 OnSessionStarted.Broadcast(Result);
             });
         }
@@ -320,6 +375,7 @@ bool UMOBAMMOBackendSubsystem::TravelToSession(APlayerController* PlayerControll
 {
     if (!PlayerController)
     {
+        SessionStatus = TEXT("TravelFailed");
         return false;
     }
 
@@ -333,11 +389,12 @@ bool UMOBAMMOBackendSubsystem::TravelToSession(APlayerController* PlayerControll
     if (FinalConnectString.IsEmpty())
     {
         UE_LOG(LogTemp, Error, TEXT("[Backend] TravelToSession aborted because connect string is empty."));
+        SessionStatus = TEXT("TravelFailed");
         return false;
     }
 
     LastSessionConnectString = FinalConnectString;
-    DebugScreen(FString::Printf(TEXT("Travel: %s"), *FinalConnectString), FColor::Green, 5.0f);
+    SessionStatus = TEXT("Traveling");
     PlayerController->ClientTravel(FinalConnectString, TRAVEL_Absolute);
     return true;
 }

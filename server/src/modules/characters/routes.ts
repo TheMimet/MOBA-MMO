@@ -78,6 +78,25 @@ export const registerCharacterRoutes: FastifyPluginAsync = async (app) => {
     }
 
     try {
+      const existingCharacter = await app.prisma.character.findUnique({
+        where: {
+          accountId_name: {
+            accountId,
+            name,
+          },
+        },
+        select: {
+          id: true,
+          name: true,
+          classId: true,
+          level: true,
+        },
+      });
+
+      if (existingCharacter) {
+        return reply.code(200).send(existingCharacter);
+      }
+
       const character = await app.prisma.character.create({
         data: {
           accountId,

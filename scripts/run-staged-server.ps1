@@ -2,11 +2,11 @@ $ErrorActionPreference = "Stop"
 
 $projectRoot = Split-Path -Parent $PSScriptRoot
 $stageRoot = Join-Path $projectRoot "Saved\StagedBuilds\WindowsServer\WindowsServer"
-$serverExe = Join-Path $stageRoot "MOBAMMOServer.exe"
+$serverExe = Join-Path $stageRoot "MOBAMMO\Binaries\Win64\MOBAMMOServer.exe"
 $defaultMap = "/Game/ThirdPerson/Lvl_ThirdPerson"
 
 if (-not (Test-Path $serverExe)) {
   throw "Staged server executable not found: $serverExe"
 }
 
-Start-Process -FilePath $serverExe -ArgumentList @($defaultMap, "-log") -WorkingDirectory $stageRoot
+Start-Process -FilePath $serverExe -ArgumentList @($defaultMap, "-log") -WorkingDirectory (Split-Path -Parent $serverExe)
