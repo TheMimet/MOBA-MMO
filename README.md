@@ -157,3 +157,34 @@ Relevant files:
 - `Source/MOBAMMO/MOBAMMOGameUISubsystem.cpp`
 - `Source/MOBAMMO/MOBAMMOGameUISubsystem.h`
 - `Source/MOBAMMO/MOBAMMOCharacterFlowWidget.cpp`
+
+#### Iris Replicated Gameplay State Bootstrap
+
+This update focused on moving multiplayer state out of local-only backend memory and into replicated gameplay classes that can travel with the player into the dedicated server world.
+
+What was added:
+
+- Added a native `AMOBAMMOGameMode` that preserves the existing ThirdPerson pawn and player controller Blueprints while assigning custom replicated game state classes.
+- Added a replicated `AMOBAMMOPlayerState` with account id, character id, character name, class id, level, health, max health, mana, and max mana.
+- Added a replicated `AMOBAMMOGameState` with connected player count so clients can observe basic multiplayer session state directly from gameplay replication.
+- Updated client travel so the connect string now carries session identity options such as account id, character id, class id, level, and character name into the dedicated server join.
+- Updated the gameplay HUD to read replicated player and game state data instead of only reading cached backend values from the local subsystem.
+- Switched the project default game mode to the new C++ game mode so the replicated state classes are consistently active in both client and dedicated server runs.
+
+Validated result:
+
+- `MOBAMMOEditor Win64 Development` builds successfully with the new replicated gameplay classes.
+- The packaged staged client build/cook/stage completes successfully with the replicated game mode and state setup included.
+
+Relevant files:
+
+- `Config/DefaultEngine.ini`
+- `Source/MOBAMMO/MOBAMMOBackendSubsystem.cpp`
+- `Source/MOBAMMO/MOBAMMOBackendSubsystem.h`
+- `Source/MOBAMMO/MOBAMMOGameMode.cpp`
+- `Source/MOBAMMO/MOBAMMOGameMode.h`
+- `Source/MOBAMMO/MOBAMMOGameState.cpp`
+- `Source/MOBAMMO/MOBAMMOGameState.h`
+- `Source/MOBAMMO/MOBAMMOPlayerState.cpp`
+- `Source/MOBAMMO/MOBAMMOPlayerState.h`
+- `Source/MOBAMMO/MOBAMMOGameHUDWidget.cpp`

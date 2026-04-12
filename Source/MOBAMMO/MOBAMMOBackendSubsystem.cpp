@@ -44,6 +44,14 @@ namespace
         return TrimmedRequested;
     }
 
+    FString SanitizeTravelOptionValue(FString Value)
+    {
+        Value.ReplaceInline(TEXT("?"), TEXT(""));
+        Value.ReplaceInline(TEXT("="), TEXT(""));
+        Value.ReplaceInline(TEXT("&"), TEXT(""));
+        return Value;
+    }
+
     void RunOnGameThread(TFunction<void()> Callback)
     {
         AsyncTask(ENamedThreads::GameThread, MoveTemp(Callback));
@@ -581,8 +589,49 @@ bool UMOBAMMOBackendSubsystem::TravelToSession(APlayerController* PlayerControll
     LastSessionConnectString = FinalConnectString;
     SessionStatus = TEXT("Traveling");
     NotifyDebugStateChanged();
-    PlayerController->ClientTravel(FinalConnectString, TRAVEL_Absolute);
+    PlayerController->ClientTravel(BuildReplicatedTravelConnectString(FinalConnectString), TRAVEL_Absolute);
     return true;
+}
+
+FString UMOBAMMOBackendSubsystem::BuildReplicatedTravelConnectString(const FString& ConnectString) const
+{
+    const FString BaseConnectString = ConnectString.TrimStartAndEnd();
+    if (BaseConnectString.IsEmpty())
+    {
+        return FString();
+    }
+
+    FString FinalConnectString = BaseConnectString;
+    auto AppendOption = [&FinalConnectString](const TCHAR* Key, const FString& RawValue)
+    {
+        const FString Value = SanitizeTravelOptionValue(RawValue);
+        if (!Value.IsEmpty())
+        {
+            FinalConnectString += FString::Printf(TEXT("?%s=%s"), Key, *Value);
+        }
+    };
+
+    AppendOption(TEXT("AccountId"), LastAccountId);
+    AppendOption(TEXT("CharacterId"), LastCharacterId);
+
+    FString SelectedCharacterName;
+    FString SelectedClassId;
+    int32 SelectedLevel = 1;
+    for (const FBackendCharacterResult& Item : CachedCharacters)
+    {
+        if (Item.CharacterId == LastCharacterId)
+        {
+            SelectedCharacterName = Item.Name;
+            SelectedClassId = Item.ClassId;
+            SelectedLevel = FMath::Max(1, Item.Level);
+            break;
+        }
+    }
+
+    AppendOption(TEXT("CharacterName"), SelectedCharacterName.IsEmpty() ? LastUsername : SelectedCharacterName);
+    AppendOption(TEXT("ClassId"), SelectedClassId);
+    FinalConnectString += FString::Printf(TEXT("?Level=%d"), SelectedLevel);
+    return FinalConnectString;
 }
 
 FString UMOBAMMOBackendSubsystem::BuildUrl(const FString& Path) const

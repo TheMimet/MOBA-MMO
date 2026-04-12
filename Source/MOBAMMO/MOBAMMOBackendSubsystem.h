@@ -153,6 +153,9 @@ public:
     bool TravelToSession(APlayerController* PlayerController, const FString& ConnectString);
 
     UFUNCTION(BlueprintPure, Category="Backend")
+    FString BuildReplicatedTravelConnectString(const FString& ConnectString) const;
+
+    UFUNCTION(BlueprintPure, Category="Backend")
     FString GetLastAccountId() const { return LastAccountId; }
 
     UFUNCTION(BlueprintPure, Category="Backend")
