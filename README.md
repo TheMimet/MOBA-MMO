@@ -100,3 +100,30 @@ Relevant files:
 - `Source/MOBAMMO/MOBAMMOCharacterFlowWidget.h`
 - `scripts/run-staged-client.ps1`
 - `scripts/run-staged-server.ps1`
+
+#### Character Flow UI Integration
+
+This update focused on making the character flow overlay behave more like the real player-facing flow instead of a temporary debug stopgap.
+
+What was added:
+
+- Added a dedicated native character entry widget so each listed character now has an explicit selectable row instead of relying on focus or pressed-state guessing.
+- Updated the character flow screen to highlight the currently selected character and rebuild the list from backend state deterministically.
+- Improved the character flow subtitle/status messaging so the overlay clearly differentiates between selection, session startup, and server travel.
+- Wired the character flow screen to initiate server travel automatically once the session start response succeeds, so the flow can progress without returning to the debug panel.
+- Added a Blueprint fallback path for `/Game/WBP_CharacterFlow` similar to the existing debug login panel flow.
+- Updated the overlay subsystem to hide the debug panel while the character flow screen is active, keeping the selection/loading experience cleaner.
+
+Validated result:
+
+- `MOBAMMOEditor Win64 Development` builds successfully with the new character entry widget and flow logic.
+- The packaged staged client build/cook/stage completes successfully with the integrated character flow UI.
+
+Relevant files:
+
+- `Source/MOBAMMO/MOBAMMOCharacterEntryWidget.cpp`
+- `Source/MOBAMMO/MOBAMMOCharacterEntryWidget.h`
+- `Source/MOBAMMO/MOBAMMOCharacterFlowWidget.cpp`
+- `Source/MOBAMMO/MOBAMMOCharacterFlowWidget.h`
+- `Source/MOBAMMO/MOBAMMODebugOverlaySubsystem.cpp`
+- `Source/MOBAMMO/MOBAMMODebugOverlaySubsystem.h`

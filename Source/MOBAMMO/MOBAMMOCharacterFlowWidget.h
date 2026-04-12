@@ -10,6 +10,7 @@ class UBorder;
 class UButton;
 class UTextBlock;
 class UVerticalBox;
+class UMOBAMMOCharacterEntryWidget;
 class UMOBAMMOBackendSubsystem;
 
 UCLASS(BlueprintType, Blueprintable)
@@ -44,6 +45,9 @@ private:
     void UpdateHeaderText();
 
     UFUNCTION()
+    void HandleLoginSucceeded(const FBackendLoginResult& Result);
+
+    UFUNCTION()
     void HandleBackendStateChanged();
 
     UFUNCTION()
@@ -68,7 +72,7 @@ private:
     void HandleRefreshCharactersClicked();
 
     UFUNCTION()
-    void HandleCharacterSlotClicked();
+    void HandleCharacterEntrySelected(const FString& CharacterId);
 
     UPROPERTY(Transient)
     TObjectPtr<UBorder> RootBorder;
@@ -95,7 +99,7 @@ private:
     TObjectPtr<UButton> StartSessionButton;
 
     UPROPERTY(Transient)
-    TArray<TObjectPtr<UButton>> CharacterButtons;
+    TArray<TObjectPtr<UMOBAMMOCharacterEntryWidget>> CharacterEntryWidgets;
 
     UPROPERTY(Transient)
     TArray<FBackendCharacterResult> RenderedCharacters;

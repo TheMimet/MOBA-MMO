@@ -123,6 +123,17 @@ TSubclassOf<UMOBAMMODebugLoginWidget> UMOBAMMODebugOverlaySubsystem::ResolveDebu
     return UMOBAMMODebugLoginWidget::StaticClass();
 }
 
+TSubclassOf<UMOBAMMOCharacterFlowWidget> UMOBAMMODebugOverlaySubsystem::ResolveCharacterFlowWidgetClass() const
+{
+    const FSoftClassPath BlueprintWidgetClassPath(TEXT("/Game/WBP_CharacterFlow.WBP_CharacterFlow_C"));
+    if (UClass* LoadedClass = BlueprintWidgetClassPath.TryLoadClass<UMOBAMMOCharacterFlowWidget>())
+    {
+        return LoadedClass;
+    }
+
+    return UMOBAMMOCharacterFlowWidget::StaticClass();
+}
+
 bool UMOBAMMODebugOverlaySubsystem::EnsureCharacterFlowWidget(APlayerController* PlayerController)
 {
     if (!PlayerController)
@@ -132,7 +143,7 @@ bool UMOBAMMODebugOverlaySubsystem::EnsureCharacterFlowWidget(APlayerController*
 
     if (!CharacterFlowWidget)
     {
-        CharacterFlowWidget = CreateWidget<UMOBAMMOCharacterFlowWidget>(PlayerController, UMOBAMMOCharacterFlowWidget::StaticClass());
+        CharacterFlowWidget = CreateWidget<UMOBAMMOCharacterFlowWidget>(PlayerController, ResolveCharacterFlowWidgetClass());
         if (CharacterFlowWidget)
         {
             CharacterFlowWidget->AddToViewport(9000);
@@ -148,6 +159,10 @@ bool UMOBAMMODebugOverlaySubsystem::EnsureCharacterFlowWidget(APlayerController*
 
     const bool bShouldBeVisible = CharacterFlowWidget->ShouldBeVisible();
     CharacterFlowWidget->SetVisibility(bShouldBeVisible ? ESlateVisibility::Visible : ESlateVisibility::Collapsed);
+    if (DebugWidget)
+    {
+        DebugWidget->SetVisibility(bShouldBeVisible ? ESlateVisibility::Collapsed : ESlateVisibility::Visible);
+    }
 
     if (bShouldBeVisible && !bCharacterFlowInputApplied)
     {

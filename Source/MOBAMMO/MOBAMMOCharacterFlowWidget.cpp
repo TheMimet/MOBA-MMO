@@ -6,6 +6,8 @@
 #include "Components/TextBlock.h"
 #include "Components/VerticalBox.h"
 #include "Components/VerticalBoxSlot.h"
+#include "GameFramework/PlayerController.h"
+#include "MOBAMMOCharacterEntryWidget.h"
 
 namespace
 {
@@ -42,6 +44,31 @@ namespace
         }
 
         return Button;
+    }
+
+    FString BuildSessionPhaseText(UMOBAMMOBackendSubsystem* BackendSubsystem)
+    {
+        if (!BackendSubsystem)
+        {
+            return TEXT("Preparing flow.");
+        }
+
+        if (BackendSubsystem->GetSessionStatus() == TEXT("Starting"))
+        {
+            return TEXT("Starting session and reserving a server slot...");
+        }
+
+        if (BackendSubsystem->GetSessionStatus() == TEXT("Traveling"))
+        {
+            return TEXT("Joining dedicated server...");
+        }
+
+        if (BackendSubsystem->IsWaitingForCharacterSelection())
+        {
+            return TEXT("Select an existing character or create a default one before entering the session.");
+        }
+
+        return TEXT("Preparing your multiplayer session.");
     }
 }
 
@@ -134,6 +161,7 @@ void UMOBAMMOCharacterFlowWidget::BindToSubsystem(UMOBAMMOBackendSubsystem* Back
     }
 
     BackendSubsystem->OnDebugStateChanged.AddDynamic(this, &UMOBAMMOCharacterFlowWidget::HandleBackendStateChanged);
+    BackendSubsystem->OnLoginSucceeded.AddDynamic(this, &UMOBAMMOCharacterFlowWidget::HandleLoginSucceeded);
     BackendSubsystem->OnCharactersLoaded.AddDynamic(this, &UMOBAMMOCharacterFlowWidget::HandleCharactersLoaded);
     BackendSubsystem->OnCharacterCreated.AddDynamic(this, &UMOBAMMOCharacterFlowWidget::HandleCharacterCreated);
     BackendSubsystem->OnSessionStarted.AddDynamic(this, &UMOBAMMOCharacterFlowWidget::HandleSessionStarted);
@@ -152,7 +180,7 @@ void UMOBAMMOCharacterFlowWidget::RebuildCharacterButtons()
     }
 
     CharacterListBox->ClearChildren();
-    CharacterButtons.Reset();
+    CharacterEntryWidgets.Reset();
     RenderedCharacters = GetBackendSubsystem() ? GetBackendSubsystem()->GetCachedCharacters() : TArray<FBackendCharacterResult>{};
 
     if (RenderedCharacters.Num() == 0)
@@ -172,9 +200,14 @@ void UMOBAMMOCharacterFlowWidget::RebuildCharacterButtons()
                 Character.Level,
                 bSelected ? TEXT("  [Selected]") : TEXT(""));
 
-            UButton* Button = MakeButton(WidgetTree, CharacterListBox, Label);
-            Button->OnClicked.AddDynamic(this, &UMOBAMMOCharacterFlowWidget::HandleCharacterSlotClicked);
-            CharacterButtons.Add(Button);
+            UMOBAMMOCharacterEntryWidget* EntryWidget = WidgetTree->ConstructWidget<UMOBAMMOCharacterEntryWidget>(UMOBAMMOCharacterEntryWidget::StaticClass());
+            EntryWidget->ConfigureEntry(Character.CharacterId, Label, bSelected);
+            EntryWidget->OnEntrySelected.AddDynamic(this, &UMOBAMMOCharacterFlowWidget::HandleCharacterEntrySelected);
+            if (UVerticalBoxSlot* EntrySlot = CharacterListBox->AddChildToVerticalBox(EntryWidget))
+            {
+                EntrySlot->SetPadding(FMargin(0.0f, 6.0f));
+            }
+            CharacterEntryWidgets.Add(EntryWidget);
         }
     }
 
@@ -199,9 +232,7 @@ void UMOBAMMOCharacterFlowWidget::UpdateHeaderText()
 
     if (SubtitleText)
     {
-        const FString Subtitle = BackendSubsystem->IsWaitingForCharacterSelection()
-            ? TEXT("Select an existing character or create a new one before entering the session.")
-            : TEXT("Preparing your multiplayer session.");
+        const FString Subtitle = BuildSessionPhaseText(BackendSubsystem);
         SubtitleText->SetText(FText::FromString(Subtitle));
     }
 
@@ -213,6 +244,11 @@ void UMOBAMMOCharacterFlowWidget::UpdateHeaderText()
             *BackendSubsystem->GetSessionStatus());
         StatusText->SetText(FText::FromString(StatusLine));
     }
+}
+
+void UMOBAMMOCharacterFlowWidget::HandleLoginSucceeded(const FBackendLoginResult& Result)
+{
+    RefreshFromBackend();
 }
 
 void UMOBAMMOCharacterFlowWidget::HandleBackendStateChanged()
@@ -232,6 +268,14 @@ void UMOBAMMOCharacterFlowWidget::HandleCharacterCreated(const FBackendCharacter
 
 void UMOBAMMOCharacterFlowWidget::HandleSessionStarted(const FBackendSessionResult& Result)
 {
+    if (UMOBAMMOBackendSubsystem* BackendSubsystem = GetBackendSubsystem())
+    {
+        if (APlayerController* PlayerController = GetOwningPlayer())
+        {
+            BackendSubsystem->TravelToSession(PlayerController, Result.ConnectString);
+        }
+    }
+
     RefreshFromBackend();
 }
 
@@ -264,36 +308,11 @@ void UMOBAMMOCharacterFlowWidget::HandleRefreshCharactersClicked()
     }
 }
 
-void UMOBAMMOCharacterFlowWidget::HandleCharacterSlotClicked()
+void UMOBAMMOCharacterFlowWidget::HandleCharacterEntrySelected(const FString& CharacterId)
 {
-    if (!GetBackendSubsystem())
+    if (UMOBAMMOBackendSubsystem* BackendSubsystem = GetBackendSubsystem())
     {
-        return;
-    }
-
-    for (int32 Index = 0; Index < CharacterButtons.Num(); ++Index)
-    {
-        if (CharacterButtons[Index] && CharacterButtons[Index]->HasUserFocus(GetOwningPlayer()) && RenderedCharacters.IsValidIndex(Index))
-        {
-            GetBackendSubsystem()->SelectCharacter(RenderedCharacters[Index].CharacterId);
-            RefreshFromBackend();
-            return;
-        }
-    }
-
-    for (int32 Index = 0; Index < CharacterButtons.Num(); ++Index)
-    {
-        if (CharacterButtons[Index] && CharacterButtons[Index]->IsPressed() && RenderedCharacters.IsValidIndex(Index))
-        {
-            GetBackendSubsystem()->SelectCharacter(RenderedCharacters[Index].CharacterId);
-            RefreshFromBackend();
-            return;
-        }
-    }
-
-    if (RenderedCharacters.Num() > 0)
-    {
-        GetBackendSubsystem()->SelectCharacter(RenderedCharacters[0].CharacterId);
+        BackendSubsystem->SelectCharacter(CharacterId);
         RefreshFromBackend();
     }
 }

@@ -21,6 +21,7 @@ private:
     bool Tick(float DeltaTime);
     bool CanCreateDebugWidget(UWorld* World) const;
     bool EnsureCharacterFlowWidget(APlayerController* PlayerController);
+    TSubclassOf<UMOBAMMOCharacterFlowWidget> ResolveCharacterFlowWidgetClass() const;
     TSubclassOf<UMOBAMMODebugLoginWidget> ResolveDebugWidgetClass() const;
 
     FTSTicker::FDelegateHandle TickHandle;
