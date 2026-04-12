@@ -30,6 +30,21 @@ public:
     UFUNCTION(BlueprintCallable, Category="MOBAMMO|Replication")
     void SetCurrentMana(float NewMana);
 
+    UFUNCTION(BlueprintCallable, Category="MOBAMMO|Replication")
+    float ApplyDamage(float Amount);
+
+    UFUNCTION(BlueprintCallable, Category="MOBAMMO|Replication")
+    float ApplyHealing(float Amount);
+
+    UFUNCTION(BlueprintCallable, Category="MOBAMMO|Replication")
+    bool ConsumeMana(float Amount);
+
+    UFUNCTION(BlueprintCallable, Category="MOBAMMO|Replication")
+    float RestoreMana(float Amount);
+
+    UFUNCTION(BlueprintPure, Category="MOBAMMO|Replication")
+    bool IsAlive() const { return CurrentHealth > 0.0f; }
+
     UFUNCTION(BlueprintPure, Category="MOBAMMO|Replication")
     FString GetAccountId() const { return AccountId; }
 

@@ -91,6 +91,7 @@ void UMOBAMMOGameHUDWidget::UpdateTexts()
     float Mana = 0.0f;
     float MaxMana = 0.0f;
     int32 ConnectedPlayers = 0;
+    FString LifeState = TEXT("Dead");
 
     if (const APlayerController* PlayerController = GetOwningPlayer())
     {
@@ -103,6 +104,7 @@ void UMOBAMMOGameHUDWidget::UpdateTexts()
             MaxHealth = PlayerState->GetMaxHealth();
             Mana = PlayerState->GetCurrentMana();
             MaxMana = PlayerState->GetMaxMana();
+            LifeState = PlayerState->IsAlive() ? TEXT("Alive") : TEXT("Dead");
         }
     }
 
@@ -117,10 +119,11 @@ void UMOBAMMOGameHUDWidget::UpdateTexts()
     if (StatusText)
     {
         StatusText->SetText(FText::FromString(FString::Printf(
-            TEXT("Connected | %s [%s] Lv.%d | HP %.0f/%.0f | MP %.0f/%.0f | Players %d"),
+            TEXT("Connected | %s [%s] Lv.%d | %s | HP %.0f/%.0f | MP %.0f/%.0f | Players %d"),
             *CharacterName,
             *ClassId,
             CharacterLevel,
+            *LifeState,
             Health,
             MaxHealth,
             Mana,

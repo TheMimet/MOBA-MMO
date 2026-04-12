@@ -63,6 +63,86 @@ void AMOBAMMOPlayerState::SetCurrentMana(float NewMana)
     BroadcastStateUpdated();
 }
 
+float AMOBAMMOPlayerState::ApplyDamage(float Amount)
+{
+    if (!HasAuthority() || Amount <= 0.0f)
+    {
+        return 0.0f;
+    }
+
+    const float PreviousHealth = CurrentHealth;
+    CurrentHealth = FMath::Clamp(CurrentHealth - Amount, 0.0f, MaxHealth);
+
+    if (!FMath::IsNearlyEqual(CurrentHealth, PreviousHealth))
+    {
+        ForceNetUpdate();
+        BroadcastStateUpdated();
+    }
+
+    return PreviousHealth - CurrentHealth;
+}
+
+float AMOBAMMOPlayerState::ApplyHealing(float Amount)
+{
+    if (!HasAuthority() || Amount <= 0.0f)
+    {
+        return 0.0f;
+    }
+
+    const float PreviousHealth = CurrentHealth;
+    CurrentHealth = FMath::Clamp(CurrentHealth + Amount, 0.0f, MaxHealth);
+
+    if (!FMath::IsNearlyEqual(CurrentHealth, PreviousHealth))
+    {
+        ForceNetUpdate();
+        BroadcastStateUpdated();
+    }
+
+    return CurrentHealth - PreviousHealth;
+}
+
+bool AMOBAMMOPlayerState::ConsumeMana(float Amount)
+{
+    if (!HasAuthority())
+    {
+        return false;
+    }
+
+    if (Amount <= 0.0f)
+    {
+        return true;
+    }
+
+    if (CurrentMana < Amount)
+    {
+        return false;
+    }
+
+    CurrentMana = FMath::Clamp(CurrentMana - Amount, 0.0f, MaxMana);
+    ForceNetUpdate();
+    BroadcastStateUpdated();
+    return true;
+}
+
+float AMOBAMMOPlayerState::RestoreMana(float Amount)
+{
+    if (!HasAuthority() || Amount <= 0.0f)
+    {
+        return 0.0f;
+    }
+
+    const float PreviousMana = CurrentMana;
+    CurrentMana = FMath::Clamp(CurrentMana + Amount, 0.0f, MaxMana);
+
+    if (!FMath::IsNearlyEqual(CurrentMana, PreviousMana))
+    {
+        ForceNetUpdate();
+        BroadcastStateUpdated();
+    }
+
+    return CurrentMana - PreviousMana;
+}
+
 void AMOBAMMOPlayerState::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const
 {
     Super::GetLifetimeReplicatedProps(OutLifetimeProps);

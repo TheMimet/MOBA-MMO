@@ -2,6 +2,7 @@
 
 #include "GameFramework/PlayerController.h"
 #include "GameFramework/PlayerState.h"
+#include "GameFramework/Pawn.h"
 #include "Kismet/GameplayStatics.h"
 #include "MOBAMMOGameState.h"
 #include "MOBAMMOPlayerState.h"
@@ -53,6 +54,74 @@ void AMOBAMMOGameMode::Logout(AController* Exiting)
     UpdateConnectedPlayerCount();
 }
 
+bool AMOBAMMOGameMode::ApplyDamageToPlayer(AController* TargetController, float Amount)
+{
+    AMOBAMMOPlayerState* PlayerState = ResolveMOBAPlayerState(TargetController);
+    if (!PlayerState || Amount <= 0.0f)
+    {
+        return false;
+    }
+
+    return PlayerState->ApplyDamage(Amount) > 0.0f;
+}
+
+bool AMOBAMMOGameMode::HealPlayer(AController* TargetController, float Amount)
+{
+    AMOBAMMOPlayerState* PlayerState = ResolveMOBAPlayerState(TargetController);
+    if (!PlayerState || Amount <= 0.0f)
+    {
+        return false;
+    }
+
+    return PlayerState->ApplyHealing(Amount) > 0.0f;
+}
+
+bool AMOBAMMOGameMode::ConsumeManaForPlayer(AController* TargetController, float Amount)
+{
+    AMOBAMMOPlayerState* PlayerState = ResolveMOBAPlayerState(TargetController);
+    if (!PlayerState || Amount < 0.0f)
+    {
+        return false;
+    }
+
+    return PlayerState->ConsumeMana(Amount);
+}
+
+bool AMOBAMMOGameMode::RestoreManaForPlayer(AController* TargetController, float Amount)
+{
+    AMOBAMMOPlayerState* PlayerState = ResolveMOBAPlayerState(TargetController);
+    if (!PlayerState || Amount <= 0.0f)
+    {
+        return false;
+    }
+
+    return PlayerState->RestoreMana(Amount) > 0.0f;
+}
+
+bool AMOBAMMOGameMode::RespawnPlayer(AController* TargetController)
+{
+    if (!HasAuthority() || !IsValid(TargetController))
+    {
+        return false;
+    }
+
+    AMOBAMMOPlayerState* PlayerState = ResolveMOBAPlayerState(TargetController);
+    if (!PlayerState)
+    {
+        return false;
+    }
+
+    if (APawn* ExistingPawn = TargetController->GetPawn())
+    {
+        TargetController->UnPossess();
+        ExistingPawn->Destroy();
+    }
+
+    RestartPlayer(TargetController);
+    InitializeDefaultAttributes(PlayerState);
+    return true;
+}
+
 void AMOBAMMOGameMode::UpdateConnectedPlayerCount()
 {
     if (AMOBAMMOGameState* MOBAGameState = GetGameState<AMOBAMMOGameState>())
@@ -91,5 +160,25 @@ void AMOBAMMOGameMode::ApplyPlayerSessionData(APlayerController* NewPlayerContro
     const int32 CharacterLevel = LevelString.IsEmpty() ? 1 : FMath::Max(1, FCString::Atoi(*LevelString));
 
     MOBAPlayerState->ApplySessionIdentity(AccountId, CharacterId, CharacterName, ClassId, CharacterLevel);
-    MOBAPlayerState->InitializeAttributes(100.0f, 50.0f);
+    InitializeDefaultAttributes(MOBAPlayerState);
+}
+
+AMOBAMMOPlayerState* AMOBAMMOGameMode::ResolveMOBAPlayerState(AController* Controller) const
+{
+    if (!HasAuthority() || !IsValid(Controller))
+    {
+        return nullptr;
+    }
+
+    return Controller->GetPlayerState<AMOBAMMOPlayerState>();
+}
+
+void AMOBAMMOGameMode::InitializeDefaultAttributes(AMOBAMMOPlayerState* PlayerState) const
+{
+    if (!PlayerState)
+    {
+        return;
+    }
+
+    PlayerState->InitializeAttributes(DefaultMaxHealth, DefaultMaxMana);
 }

@@ -188,3 +188,29 @@ Relevant files:
 - `Source/MOBAMMO/MOBAMMOPlayerState.cpp`
 - `Source/MOBAMMO/MOBAMMOPlayerState.h`
 - `Source/MOBAMMO/MOBAMMOGameHUDWidget.cpp`
+
+#### Authoritative Stat Mutation Bootstrap
+
+This update focused on taking the replicated player state one step further so the dedicated server owns basic gameplay mutation instead of leaving stats as passive replicated values only.
+
+What was added:
+
+- Added authority-only health helpers on `AMOBAMMOPlayerState` for damage and healing.
+- Added authority-only mana helpers on `AMOBAMMOPlayerState` for spending and restoring mana.
+- Added an `IsAlive` state query so UI and gameplay code can read a simple alive/dead view from replicated health.
+- Added server-owned gameplay helpers on `AMOBAMMOGameMode` for applying damage, healing, mana consumption, mana restoration, and respawning a controller.
+- Centralized default attribute initialization in the game mode so spawn and respawn use the same health and mana baseline.
+- Updated the in-game HUD so it now reflects `Alive` or `Dead` alongside the replicated health, mana, and player count values.
+
+Validated result:
+
+- `MOBAMMOEditor Win64 Development` builds successfully with the new authoritative gameplay helpers in place.
+- The gameplay mutation layer now has a clean server authority entry point that future ability, combat, and respawn systems can call instead of mutating replicated values ad hoc.
+
+Relevant files:
+
+- `Source/MOBAMMO/MOBAMMOGameMode.cpp`
+- `Source/MOBAMMO/MOBAMMOGameMode.h`
+- `Source/MOBAMMO/MOBAMMOPlayerState.cpp`
+- `Source/MOBAMMO/MOBAMMOPlayerState.h`
+- `Source/MOBAMMO/MOBAMMOGameHUDWidget.cpp`
