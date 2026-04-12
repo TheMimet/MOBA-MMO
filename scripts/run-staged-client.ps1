@@ -8,4 +8,4 @@ if (-not (Test-Path $gameExe)) {
   throw "Staged game executable not found: $gameExe"
 }
 
-Start-Process -FilePath $gameExe -ArgumentList @("-log", "-windowed", "-ResX=1280", "-ResY=720") -WorkingDirectory $stageRoot
+Start-Process -FilePath $gameExe -ArgumentList @("-log", "-windowed", "-ResX=1280", "-ResY=720", "-UseIrisReplication=1") -WorkingDirectory $stageRoot

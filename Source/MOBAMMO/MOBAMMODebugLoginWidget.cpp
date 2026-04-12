@@ -91,6 +91,16 @@ FString UMOBAMMODebugLoginWidget::GetCharacterStatus() const
     return TEXT("Unavailable");
 }
 
+FString UMOBAMMODebugLoginWidget::GetCharacterListStatus() const
+{
+    if (const UMOBAMMOBackendSubsystem* BackendSubsystem = GetBackendSubsystem())
+    {
+        return BackendSubsystem->GetCharacterListStatus();
+    }
+
+    return TEXT("Unavailable");
+}
+
 FString UMOBAMMODebugLoginWidget::GetSessionStatus() const
 {
     if (const UMOBAMMOBackendSubsystem* BackendSubsystem = GetBackendSubsystem())
@@ -151,6 +161,16 @@ FString UMOBAMMODebugLoginWidget::GetLastConnectString() const
     return FString();
 }
 
+TArray<FBackendCharacterResult> UMOBAMMODebugLoginWidget::GetCachedCharacters() const
+{
+    if (const UMOBAMMOBackendSubsystem* BackendSubsystem = GetBackendSubsystem())
+    {
+        return BackendSubsystem->GetCachedCharacters();
+    }
+
+    return {};
+}
+
 void UMOBAMMODebugLoginWidget::TriggerMockLogin()
 {
     if (UMOBAMMOBackendSubsystem* BackendSubsystem = GetBackendSubsystem())
@@ -160,16 +180,21 @@ void UMOBAMMODebugLoginWidget::TriggerMockLogin()
     }
 }
 
+void UMOBAMMODebugLoginWidget::TriggerListCharacters()
+{
+    if (UMOBAMMOBackendSubsystem* BackendSubsystem = GetBackendSubsystem())
+    {
+        BindToSubsystem(BackendSubsystem);
+        BackendSubsystem->ListCharacters(BackendSubsystem->GetLastAccountId());
+    }
+}
+
 void UMOBAMMODebugLoginWidget::TriggerCreateCharacter()
 {
     if (UMOBAMMOBackendSubsystem* BackendSubsystem = GetBackendSubsystem())
     {
         BindToSubsystem(BackendSubsystem);
-        BackendSubsystem->CreateCharacter(
-            BackendSubsystem->GetLastAccountId(),
-            DefaultCharacterName,
-            DefaultClassId
-        );
+        BackendSubsystem->CreateCharacterForCurrentAccount(DefaultCharacterName, DefaultClassId);
     }
 }
 
@@ -178,7 +203,7 @@ void UMOBAMMODebugLoginWidget::TriggerStartSession()
     if (UMOBAMMOBackendSubsystem* BackendSubsystem = GetBackendSubsystem())
     {
         BindToSubsystem(BackendSubsystem);
-        BackendSubsystem->StartSession(BackendSubsystem->GetLastCharacterId());
+        BackendSubsystem->StartSessionForSelectedCharacter();
     }
 }
 
@@ -224,6 +249,7 @@ void UMOBAMMODebugLoginWidget::BuildDebugLayout()
     AddLabel(WidgetTree, Panel, TEXT("Debug Login Panel"), FLinearColor(0.6f, 1.0f, 0.6f, 1.0f));
     BackendUrlText = AddLabel(WidgetTree, Panel, TEXT("Backend URL: -"));
     LoginStatusText = AddLabel(WidgetTree, Panel, TEXT("Login Status: -"));
+    CharacterListStatusText = AddLabel(WidgetTree, Panel, TEXT("Character List Status: -"));
     CharacterStatusText = AddLabel(WidgetTree, Panel, TEXT("Character Status: -"));
     SessionStatusText = AddLabel(WidgetTree, Panel, TEXT("Session Status: -"));
     ErrorText = AddLabel(WidgetTree, Panel, TEXT("Last Error: -"), FLinearColor(1.0f, 0.6f, 0.6f, 1.0f));
@@ -232,9 +258,20 @@ void UMOBAMMODebugLoginWidget::BuildDebugLayout()
     CharacterIdText = AddLabel(WidgetTree, Panel, TEXT("Character Id: -"));
     ConnectStringText = AddLabel(WidgetTree, Panel, TEXT("Connect String: -"));
 
+    AddLabel(WidgetTree, Panel, TEXT("Characters"), FLinearColor(0.65f, 0.85f, 1.0f, 1.0f));
+    for (int32 Index = 0; Index < 5; ++Index)
+    {
+        CharacterEntryTexts.Add(AddLabel(WidgetTree, Panel, FString::Printf(TEXT("- Empty Slot %d"), Index + 1)));
+    }
+
     if (UButton* Button = AddButton(WidgetTree, Panel, TEXT("Mock Login")))
     {
         Button->OnClicked.AddDynamic(this, &UMOBAMMODebugLoginWidget::HandleMockLoginClicked);
+    }
+
+    if (UButton* Button = AddButton(WidgetTree, Panel, TEXT("Refresh Characters")))
+    {
+        Button->OnClicked.AddDynamic(this, &UMOBAMMODebugLoginWidget::HandleRefreshCharactersClicked);
     }
 
     if (UButton* Button = AddButton(WidgetTree, Panel, TEXT("Create Character")))
@@ -293,6 +330,11 @@ void UMOBAMMODebugLoginWidget::RefreshDisplay()
         CharacterStatusText->SetText(FText::FromString(FString::Printf(TEXT("Character Status: %s"), *GetCharacterStatus())));
     }
 
+    if (CharacterListStatusText)
+    {
+        CharacterListStatusText->SetText(FText::FromString(FString::Printf(TEXT("Character List Status: %s"), *GetCharacterListStatus())));
+    }
+
     if (SessionStatusText)
     {
         SessionStatusText->SetText(FText::FromString(FString::Printf(TEXT("Session Status: %s"), *GetSessionStatus())));
@@ -327,6 +369,30 @@ void UMOBAMMODebugLoginWidget::RefreshDisplay()
         const FString Value = GetLastConnectString().IsEmpty() ? TEXT("-") : GetLastConnectString();
         ConnectStringText->SetText(FText::FromString(FString::Printf(TEXT("Connect String: %s"), *Value)));
     }
+
+    const TArray<FBackendCharacterResult> Characters = GetCachedCharacters();
+    for (int32 Index = 0; Index < CharacterEntryTexts.Num(); ++Index)
+    {
+        if (!CharacterEntryTexts[Index])
+        {
+            continue;
+        }
+
+        if (Characters.IsValidIndex(Index))
+        {
+            const FBackendCharacterResult& Item = Characters[Index];
+            const FString SelectedSuffix = (Item.CharacterId == GetLastCharacterId()) ? TEXT(" [Selected]") : TEXT("");
+            CharacterEntryTexts[Index]->SetText(
+                FText::FromString(
+                    FString::Printf(TEXT("%d. %s [%s] Lv.%d%s"), Index + 1, *Item.Name, *Item.ClassId, Item.Level, *SelectedSuffix)
+                )
+            );
+        }
+        else
+        {
+            CharacterEntryTexts[Index]->SetText(FText::FromString(FString::Printf(TEXT("%d. -"), Index + 1)));
+        }
+    }
 }
 
 void UMOBAMMODebugLoginWidget::HandleMockLoginClicked()
@@ -337,6 +403,11 @@ void UMOBAMMODebugLoginWidget::HandleMockLoginClicked()
 void UMOBAMMODebugLoginWidget::HandleCreateCharacterClicked()
 {
     TriggerCreateCharacter();
+}
+
+void UMOBAMMODebugLoginWidget::HandleRefreshCharactersClicked()
+{
+    TriggerListCharacters();
 }
 
 void UMOBAMMODebugLoginWidget::HandleStartSessionClicked()

@@ -46,6 +46,9 @@ public:
     FString GetCharacterStatus() const;
 
     UFUNCTION(BlueprintPure, Category="Backend|Debug")
+    FString GetCharacterListStatus() const;
+
+    UFUNCTION(BlueprintPure, Category="Backend|Debug")
     FString GetSessionStatus() const;
 
     UFUNCTION(BlueprintPure, Category="Backend|Debug")
@@ -63,8 +66,14 @@ public:
     UFUNCTION(BlueprintPure, Category="Backend|Debug")
     FString GetLastConnectString() const;
 
+    UFUNCTION(BlueprintPure, Category="Backend|Debug")
+    TArray<FBackendCharacterResult> GetCachedCharacters() const;
+
     UFUNCTION(BlueprintCallable, Category="Backend|Debug")
     void TriggerMockLogin();
+
+    UFUNCTION(BlueprintCallable, Category="Backend|Debug")
+    void TriggerListCharacters();
 
     UFUNCTION(BlueprintCallable, Category="Backend|Debug")
     void TriggerCreateCharacter();
@@ -90,6 +99,9 @@ private:
 
     UFUNCTION()
     void HandleCreateCharacterClicked();
+
+    UFUNCTION()
+    void HandleRefreshCharactersClicked();
 
     UFUNCTION()
     void HandleStartSessionClicked();
@@ -125,6 +137,9 @@ private:
     TObjectPtr<UTextBlock> CharacterStatusText;
 
     UPROPERTY(Transient)
+    TObjectPtr<UTextBlock> CharacterListStatusText;
+
+    UPROPERTY(Transient)
     TObjectPtr<UTextBlock> SessionStatusText;
 
     UPROPERTY(Transient)
@@ -141,6 +156,9 @@ private:
 
     UPROPERTY(Transient)
     TObjectPtr<UTextBlock> ConnectStringText;
+
+    UPROPERTY(Transient)
+    TArray<TObjectPtr<UTextBlock>> CharacterEntryTexts;
 
     bool bIsBoundToSubsystem = false;
 };

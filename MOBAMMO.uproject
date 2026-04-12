@@ -12,6 +12,10 @@
 	],
 	"Plugins": [
 		{
+			"Name": "Iris",
+			"Enabled": true
+		},
+		{
 			"Name": "ModelingToolsEditorMode",
 			"Enabled": true,
 			"TargetAllowList": [

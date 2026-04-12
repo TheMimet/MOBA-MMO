@@ -64,3 +64,39 @@ Relevant files:
 - `Source/MOBAMMO/MOBAMMODebugLoginWidget.h`
 - `Source/MOBAMMO/MOBAMMODebugOverlaySubsystem.cpp`
 - `Source/MOBAMMO/MOBAMMODebugOverlaySubsystem.h`
+
+#### Iris Replication And Character Flow Foundation
+
+This update focused on turning the working local join flow into a cleaner multiplayer foundation with Iris enabled and a manual character flow path prepared.
+
+What was added:
+
+- Enabled the `Iris` plugin at the project level and turned on Iris replication with `net.Iris.UseIrisReplication=1`.
+- Updated the staged client and staged server launch scripts so local packaged runs explicitly start with Iris replication enabled.
+- Added backend support for listing characters after login, caching the character list, tracking character list status, and exposing the selected character id.
+- Added a manual character flow guard so old Blueprint auto-create and auto-start calls do not immediately bypass character selection once login succeeds.
+- Added explicit backend entry points for `ListCharacters`, `CreateCharacterForCurrentAccount`, `SelectCharacter`, and `StartSessionForSelectedCharacter`.
+- Expanded the in-game debug widget so it can show cached characters, character list status, and refresh the character list directly from the overlay.
+- Added a native `UMOBAMMOCharacterFlowWidget` overlay that presents a basic character flow UI with refresh, create default character, and continue actions.
+- Updated the debug overlay subsystem so it can show or hide the character flow overlay and switch input mode cleanly while the player is in selection/loading flow.
+
+Validated result:
+
+- `MOBAMMOEditor Win64 Development` builds successfully with Iris enabled and the new character flow code in place.
+- The packaged staged client build completes successfully with the updated launch scripts and runtime UI changes.
+- The project now has the groundwork for moving from debug bootstrap behavior to a real `login -> character select -> start session -> loading -> travel` flow.
+
+Relevant files:
+
+- `MOBAMMO.uproject`
+- `Config/DefaultEngine.ini`
+- `Source/MOBAMMO/MOBAMMOBackendSubsystem.cpp`
+- `Source/MOBAMMO/MOBAMMOBackendSubsystem.h`
+- `Source/MOBAMMO/MOBAMMODebugLoginWidget.cpp`
+- `Source/MOBAMMO/MOBAMMODebugLoginWidget.h`
+- `Source/MOBAMMO/MOBAMMODebugOverlaySubsystem.cpp`
+- `Source/MOBAMMO/MOBAMMODebugOverlaySubsystem.h`
+- `Source/MOBAMMO/MOBAMMOCharacterFlowWidget.cpp`
+- `Source/MOBAMMO/MOBAMMOCharacterFlowWidget.h`
+- `scripts/run-staged-client.ps1`
+- `scripts/run-staged-server.ps1`

@@ -9,4 +9,4 @@ if (-not (Test-Path $serverExe)) {
   throw "Staged server executable not found: $serverExe"
 }
 
-Start-Process -FilePath $serverExe -ArgumentList @($defaultMap, "-log") -WorkingDirectory (Split-Path -Parent $serverExe)
+Start-Process -FilePath $serverExe -ArgumentList @($defaultMap, "-log", "-UseIrisReplication=1") -WorkingDirectory (Split-Path -Parent $serverExe)

@@ -4,6 +4,8 @@
 #include "Engine/LocalPlayer.h"
 #include "Engine/World.h"
 #include "GameFramework/PlayerController.h"
+#include "Blueprint/UserWidget.h"
+#include "MOBAMMOCharacterFlowWidget.h"
 #include "MOBAMMODebugLoginWidget.h"
 #include "UObject/SoftObjectPath.h"
 
@@ -33,6 +35,12 @@ void UMOBAMMODebugOverlaySubsystem::Deinitialize()
     {
         DebugWidget->RemoveFromParent();
         DebugWidget = nullptr;
+    }
+
+    if (CharacterFlowWidget)
+    {
+        CharacterFlowWidget->RemoveFromParent();
+        CharacterFlowWidget = nullptr;
     }
 
     Super::Deinitialize();
@@ -72,15 +80,18 @@ bool UMOBAMMODebugOverlaySubsystem::Tick(float DeltaTime)
         return true;
     }
 
+    EnsureCharacterFlowWidget(PlayerController);
+
     const TSubclassOf<UMOBAMMODebugLoginWidget> DebugWidgetClass = ResolveDebugWidgetClass();
-    DebugWidget = CreateWidget<UMOBAMMODebugLoginWidget>(PlayerController, DebugWidgetClass);
     if (!DebugWidget)
     {
-        return true;
+        DebugWidget = CreateWidget<UMOBAMMODebugLoginWidget>(PlayerController, DebugWidgetClass);
+        if (DebugWidget)
+        {
+            DebugWidget->AddToViewport(10000);
+            DebugWidget->SetPositionInViewport(FVector2D(24.0f, 24.0f), false);
+        }
     }
-
-    DebugWidget->AddToViewport(10000);
-    DebugWidget->SetPositionInViewport(FVector2D(24.0f, 24.0f), false);
 
     return true;
 #endif
@@ -110,4 +121,49 @@ TSubclassOf<UMOBAMMODebugLoginWidget> UMOBAMMODebugOverlaySubsystem::ResolveDebu
     }
 
     return UMOBAMMODebugLoginWidget::StaticClass();
+}
+
+bool UMOBAMMODebugOverlaySubsystem::EnsureCharacterFlowWidget(APlayerController* PlayerController)
+{
+    if (!PlayerController)
+    {
+        return false;
+    }
+
+    if (!CharacterFlowWidget)
+    {
+        CharacterFlowWidget = CreateWidget<UMOBAMMOCharacterFlowWidget>(PlayerController, UMOBAMMOCharacterFlowWidget::StaticClass());
+        if (CharacterFlowWidget)
+        {
+            CharacterFlowWidget->AddToViewport(9000);
+        }
+    }
+
+    if (!CharacterFlowWidget)
+    {
+        return false;
+    }
+
+    CharacterFlowWidget->RefreshFromBackend();
+
+    const bool bShouldBeVisible = CharacterFlowWidget->ShouldBeVisible();
+    CharacterFlowWidget->SetVisibility(bShouldBeVisible ? ESlateVisibility::Visible : ESlateVisibility::Collapsed);
+
+    if (bShouldBeVisible && !bCharacterFlowInputApplied)
+    {
+        PlayerController->SetShowMouseCursor(true);
+        FInputModeGameAndUI InputMode;
+        InputMode.SetHideCursorDuringCapture(false);
+        PlayerController->SetInputMode(InputMode);
+        bCharacterFlowInputApplied = true;
+    }
+    else if (!bShouldBeVisible && bCharacterFlowInputApplied)
+    {
+        PlayerController->SetShowMouseCursor(false);
+        FInputModeGameOnly InputMode;
+        PlayerController->SetInputMode(InputMode);
+        bCharacterFlowInputApplied = false;
+    }
+
+    return true;
 }

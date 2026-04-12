@@ -75,6 +75,7 @@ FString UMOBAMMOBackendSubsystem::GetBackendBaseUrl() const
 
 UMOBAMMOBackendSubsystem::UMOBAMMOBackendSubsystem()
     : LoginStatus(TEXT("Idle"))
+    , CharacterListStatus(TEXT("Idle"))
     , CharacterStatus(TEXT("Idle"))
     , SessionStatus(TEXT("Idle"))
 {
@@ -83,6 +84,25 @@ UMOBAMMOBackendSubsystem::UMOBAMMOBackendSubsystem()
 void UMOBAMMOBackendSubsystem::NotifyDebugStateChanged()
 {
     OnDebugStateChanged.Broadcast();
+}
+
+bool UMOBAMMOBackendSubsystem::ShouldUseManualCharacterFlow() const
+{
+    return !ShouldSkipAutomaticBackendBootstrap(this);
+}
+
+bool UMOBAMMOBackendSubsystem::CanRunCharacterFlowAction(const FString& FailureMessage, FBackendRequestFailedSignature& FailureDelegate, FString& InOutStatus)
+{
+    if (!bManualCharacterFlowPending || bCharacterFlowActionAuthorized)
+    {
+        return true;
+    }
+
+    LastErrorMessage = FailureMessage;
+    InOutStatus = TEXT("Blocked");
+    NotifyDebugStateChanged();
+    FailureDelegate.Broadcast(FailureMessage);
+    return false;
 }
 
 void UMOBAMMOBackendSubsystem::MockLogin(const FString& Username)
@@ -168,8 +188,14 @@ void UMOBAMMOBackendSubsystem::MockLogin(const FString& Username)
             RunOnGameThread([this, Result]()
             {
                 LoginStatus = TEXT("Succeeded");
+                bManualCharacterFlowPending = ShouldUseManualCharacterFlow();
+                bCharacterFlowActionAuthorized = false;
                 NotifyDebugStateChanged();
                 OnLoginSucceeded.Broadcast(Result);
+                if (bManualCharacterFlowPending)
+                {
+                    ListCharacters(Result.AccountId);
+                }
             });
         }
     );
@@ -187,6 +213,11 @@ void UMOBAMMOBackendSubsystem::MockLogin(const FString& Username)
 
 void UMOBAMMOBackendSubsystem::CreateCharacter(const FString& AccountId, const FString& CharacterName, const FString& ClassId)
 {
+    if (!CanRunCharacterFlowAction(TEXT("Karakter olusturma artik secim akisi uzerinden yapilmali."), OnCharacterCreateFailed, CharacterStatus))
+    {
+        return;
+    }
+
     const FString TrimmedAccountId = AccountId.TrimStartAndEnd();
     const FString TrimmedCharacterName = CharacterName.TrimStartAndEnd();
     const FString TrimmedClassId = ClassId.TrimStartAndEnd().IsEmpty() ? TEXT("fighter") : ClassId.TrimStartAndEnd();
@@ -280,6 +311,10 @@ void UMOBAMMOBackendSubsystem::CreateCharacter(const FString& AccountId, const F
 
             RunOnGameThread([this, Result]()
             {
+                bCharacterFlowActionAuthorized = false;
+                SelectedCharacterId = Result.CharacterId;
+                LastCharacterId = Result.CharacterId;
+                CachedCharacters.Add(Result);
                 CharacterStatus = TEXT("Succeeded");
                 NotifyDebugStateChanged();
                 OnCharacterCreated.Broadcast(Result);
@@ -291,8 +326,130 @@ void UMOBAMMOBackendSubsystem::CreateCharacter(const FString& AccountId, const F
     UE_LOG(LogTemp, Log, TEXT("[Backend] CreateCharacter ProcessRequest returned %s"), bRequestStarted ? TEXT("true") : TEXT("false"));
 }
 
+void UMOBAMMOBackendSubsystem::CreateCharacterForCurrentAccount(const FString& CharacterName, const FString& ClassId)
+{
+    bCharacterFlowActionAuthorized = true;
+    CreateCharacter(LastAccountId, CharacterName, ClassId);
+}
+
+void UMOBAMMOBackendSubsystem::ListCharacters(const FString& AccountId)
+{
+    const FString TrimmedAccountId = AccountId.TrimStartAndEnd();
+    if (TrimmedAccountId.IsEmpty())
+    {
+        LastErrorMessage = TEXT("AccountId gereklidir.");
+        CharacterListStatus = TEXT("Failed");
+        NotifyDebugStateChanged();
+        OnCharactersLoadFailed.Broadcast(TEXT("AccountId gereklidir."));
+        return;
+    }
+
+    LastErrorMessage.Reset();
+    CharacterListStatus = TEXT("Loading");
+    NotifyDebugStateChanged();
+    UE_LOG(LogTemp, Log, TEXT("[Backend] ListCharacters starting. AccountId=%s"), *TrimmedAccountId);
+
+    TSharedRef<IHttpRequest, ESPMode::ThreadSafe> Request = FHttpModule::Get().CreateRequest();
+    Request->SetURL(BuildUrl(FString::Printf(TEXT("/characters?accountId=%s"), *TrimmedAccountId)));
+    Request->SetVerb(TEXT("GET"));
+
+    Request->OnProcessRequestComplete().BindLambda(
+        [this](FHttpRequestPtr HttpRequest, FHttpResponsePtr Response, bool bWasSuccessful)
+        {
+            if (!bWasSuccessful || !Response.IsValid())
+            {
+                UE_LOG(LogTemp, Error, TEXT("[Backend] ListCharacters request failed. Success=%s ResponseValid=%s Url=%s"),
+                    bWasSuccessful ? TEXT("true") : TEXT("false"),
+                    Response.IsValid() ? TEXT("true") : TEXT("false"),
+                    HttpRequest.IsValid() ? *HttpRequest->GetURL() : TEXT("<invalid request>"));
+                RunOnGameThread([this]()
+                {
+                    LastErrorMessage = TEXT("Karakter listesi alinamadi.");
+                    CharacterListStatus = TEXT("Failed");
+                    NotifyDebugStateChanged();
+                    OnCharactersLoadFailed.Broadcast(TEXT("Karakter listesi alinamadi."));
+                });
+                return;
+            }
+
+            TSharedPtr<FJsonObject> JsonObject;
+            FString ErrorMessage;
+            if (!TryReadJsonResponse(Response, JsonObject, ErrorMessage))
+            {
+                UE_LOG(LogTemp, Error, TEXT("[Backend] ListCharacters response parse/error failed. Code=%d Error=%s Body=%s"),
+                    Response->GetResponseCode(),
+                    *ErrorMessage,
+                    *Response->GetContentAsString());
+                RunOnGameThread([this, ErrorMessage]()
+                {
+                    LastErrorMessage = ErrorMessage;
+                    CharacterListStatus = TEXT("Failed");
+                    NotifyDebugStateChanged();
+                    OnCharactersLoadFailed.Broadcast(ErrorMessage);
+                });
+                return;
+            }
+
+            FBackendCharacterListResult Result;
+            const TArray<TSharedPtr<FJsonValue>>* Items = nullptr;
+            if (JsonObject->TryGetArrayField(TEXT("items"), Items) && Items)
+            {
+                for (const TSharedPtr<FJsonValue>& ItemValue : *Items)
+                {
+                    const TSharedPtr<FJsonObject>* ItemObject = nullptr;
+                    if (!ItemValue.IsValid() || !ItemValue->TryGetObject(ItemObject) || !ItemObject || !ItemObject->IsValid())
+                    {
+                        continue;
+                    }
+
+                    FBackendCharacterResult Item;
+                    Item.CharacterId = (*ItemObject)->GetStringField(TEXT("id"));
+                    Item.Name = (*ItemObject)->GetStringField(TEXT("name"));
+                    Item.ClassId = (*ItemObject)->GetStringField(TEXT("classId"));
+                    Item.Level = (*ItemObject)->GetIntegerField(TEXT("level"));
+                    Result.Items.Add(Item);
+                }
+            }
+
+            UE_LOG(LogTemp, Log, TEXT("[Backend] ListCharacters succeeded. Count=%d"), Result.Items.Num());
+
+            RunOnGameThread([this, Result]()
+            {
+                CachedCharacters = Result.Items;
+                if (CachedCharacters.Num() > 0)
+                {
+                    LastCharacterId = CachedCharacters[0].CharacterId;
+                    SelectedCharacterId = LastCharacterId;
+                }
+                else
+                {
+                    SelectedCharacterId.Reset();
+                }
+                CharacterListStatus = TEXT("Loaded");
+                NotifyDebugStateChanged();
+                OnCharactersLoaded.Broadcast(Result);
+            });
+        }
+    );
+
+    const bool bRequestStarted = Request->ProcessRequest();
+    UE_LOG(LogTemp, Log, TEXT("[Backend] ListCharacters ProcessRequest returned %s"), bRequestStarted ? TEXT("true") : TEXT("false"));
+    if (!bRequestStarted)
+    {
+        LastErrorMessage = TEXT("Karakter listesi istegi baslatilamadi.");
+        CharacterListStatus = TEXT("Failed");
+        NotifyDebugStateChanged();
+        OnCharactersLoadFailed.Broadcast(TEXT("Karakter listesi istegi baslatilamadi."));
+    }
+}
+
 void UMOBAMMOBackendSubsystem::StartSession(const FString& CharacterId)
 {
+    if (!CanRunCharacterFlowAction(TEXT("Session baslatma artik secili karakter uzerinden yapilmali."), OnSessionStartFailed, SessionStatus))
+    {
+        return;
+    }
+
     const FString TrimmedCharacterId = CharacterId.TrimStartAndEnd();
     if (TrimmedCharacterId.IsEmpty())
     {
@@ -384,6 +541,8 @@ void UMOBAMMOBackendSubsystem::StartSession(const FString& CharacterId)
 
             RunOnGameThread([this, Result]()
             {
+                bCharacterFlowActionAuthorized = false;
+                bManualCharacterFlowPending = false;
                 SessionStatus = TEXT("Ready");
                 NotifyDebugStateChanged();
                 OnSessionStarted.Broadcast(Result);
@@ -470,4 +629,39 @@ FString UMOBAMMOBackendSubsystem::BuildErrorMessage(FHttpResponseHandle Response
     }
 
     return FallbackMessage;
+}
+
+void UMOBAMMOBackendSubsystem::SelectCharacter(const FString& CharacterId)
+{
+    const FString TrimmedCharacterId = CharacterId.TrimStartAndEnd();
+    if (TrimmedCharacterId.IsEmpty())
+    {
+        return;
+    }
+
+    for (const FBackendCharacterResult& Item : CachedCharacters)
+    {
+        if (Item.CharacterId == TrimmedCharacterId)
+        {
+            SelectedCharacterId = TrimmedCharacterId;
+            LastCharacterId = TrimmedCharacterId;
+            NotifyDebugStateChanged();
+            return;
+        }
+    }
+}
+
+void UMOBAMMOBackendSubsystem::StartSessionForSelectedCharacter()
+{
+    if (SelectedCharacterId.IsEmpty())
+    {
+        LastErrorMessage = TEXT("Once bir karakter secilmelidir.");
+        SessionStatus = TEXT("Failed");
+        NotifyDebugStateChanged();
+        OnSessionStartFailed.Broadcast(TEXT("Once bir karakter secilmelidir."));
+        return;
+    }
+
+    bCharacterFlowActionAuthorized = true;
+    StartSession(SelectedCharacterId);
 }
