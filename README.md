@@ -36,3 +36,31 @@ Relevant files:
 - `scripts/run-staged-server.ps1`
 - `scripts/build-cook-stage-client.ps1`
 - `server/src/modules/characters/routes.ts`
+
+#### Debug Overlay Bootstrap
+
+This follow-up update focused on making the backend/session flow observable in-game without relying on log copy-paste.
+
+What was added:
+
+- Added a native debug login widget class that can display backend URL, login status, character status, session status, last error, last username, account id, character id, and connect string.
+- Added widget actions for `Mock Login`, `Create Character`, `Start Session`, and `Join Server`.
+- Added a lightweight debug overlay subsystem that automatically creates the debug panel in local game worlds.
+- Added a fallback chain so the game tries `/Game/WBP_DebugLogin` first and falls back to the native C++ widget if the Blueprint class is not ready.
+- Added a general backend debug state change signal so the panel can refresh immediately when requests start, fail, succeed, or travel begins.
+- Added `UMG` as a module dependency for the new runtime debug UI.
+
+Validated result:
+
+- `MOBAMMOEditor Win64 Development` builds successfully with the new widget and overlay subsystem.
+- Staged client build/cook/stage completes successfully with the new debug overlay code included.
+
+Relevant files:
+
+- `Source/MOBAMMO/MOBAMMO.Build.cs`
+- `Source/MOBAMMO/MOBAMMOBackendSubsystem.cpp`
+- `Source/MOBAMMO/MOBAMMOBackendSubsystem.h`
+- `Source/MOBAMMO/MOBAMMODebugLoginWidget.cpp`
+- `Source/MOBAMMO/MOBAMMODebugLoginWidget.h`
+- `Source/MOBAMMO/MOBAMMODebugOverlaySubsystem.cpp`
+- `Source/MOBAMMO/MOBAMMODebugOverlaySubsystem.h`

@@ -80,11 +80,17 @@ UMOBAMMOBackendSubsystem::UMOBAMMOBackendSubsystem()
 {
 }
 
+void UMOBAMMOBackendSubsystem::NotifyDebugStateChanged()
+{
+    OnDebugStateChanged.Broadcast();
+}
+
 void UMOBAMMOBackendSubsystem::MockLogin(const FString& Username)
 {
     if (ShouldSkipAutomaticBackendBootstrap(this))
     {
         UE_LOG(LogTemp, Log, TEXT("[Backend] MockLogin skipped because world is already a network client."));
+        NotifyDebugStateChanged();
         return;
     }
 
@@ -93,6 +99,7 @@ void UMOBAMMOBackendSubsystem::MockLogin(const FString& Username)
     {
         LastErrorMessage = TEXT("Username gereklidir.");
         LoginStatus = TEXT("Failed");
+        NotifyDebugStateChanged();
         OnLoginFailed.Broadcast(TEXT("Username gereklidir."));
         return;
     }
@@ -100,6 +107,7 @@ void UMOBAMMOBackendSubsystem::MockLogin(const FString& Username)
     LastUsername = TrimmedUsername;
     LastErrorMessage.Reset();
     LoginStatus = TEXT("LoggingIn");
+    NotifyDebugStateChanged();
     const FString LoginUrl = BuildUrl(TEXT("/auth/login"));
     UE_LOG(LogTemp, Log, TEXT("[Backend] MockLogin starting. Username=%s Url=%s"), *TrimmedUsername, *LoginUrl);
 
@@ -125,6 +133,7 @@ void UMOBAMMOBackendSubsystem::MockLogin(const FString& Username)
                 {
                     LastErrorMessage = TEXT("Login istegi basarisiz oldu.");
                     LoginStatus = TEXT("Failed");
+                    NotifyDebugStateChanged();
                     OnLoginFailed.Broadcast(TEXT("Login istegi basarisiz oldu."));
                 });
                 return;
@@ -142,6 +151,7 @@ void UMOBAMMOBackendSubsystem::MockLogin(const FString& Username)
                 {
                     LastErrorMessage = ErrorMessage;
                     LoginStatus = TEXT("Failed");
+                    NotifyDebugStateChanged();
                     OnLoginFailed.Broadcast(ErrorMessage);
                 });
                 return;
@@ -158,6 +168,7 @@ void UMOBAMMOBackendSubsystem::MockLogin(const FString& Username)
             RunOnGameThread([this, Result]()
             {
                 LoginStatus = TEXT("Succeeded");
+                NotifyDebugStateChanged();
                 OnLoginSucceeded.Broadcast(Result);
             });
         }
@@ -169,6 +180,7 @@ void UMOBAMMOBackendSubsystem::MockLogin(const FString& Username)
     {
         LastErrorMessage = TEXT("Login istegi baslatilamadi.");
         LoginStatus = TEXT("Failed");
+        NotifyDebugStateChanged();
         OnLoginFailed.Broadcast(TEXT("Login istegi baslatilamadi."));
     }
 }
@@ -183,6 +195,7 @@ void UMOBAMMOBackendSubsystem::CreateCharacter(const FString& AccountId, const F
     {
         LastErrorMessage = TEXT("AccountId gereklidir.");
         CharacterStatus = TEXT("Failed");
+        NotifyDebugStateChanged();
         OnCharacterCreateFailed.Broadcast(TEXT("AccountId gereklidir."));
         return;
     }
@@ -191,12 +204,14 @@ void UMOBAMMOBackendSubsystem::CreateCharacter(const FString& AccountId, const F
     {
         LastErrorMessage = TEXT("Karakter adi gereklidir.");
         CharacterStatus = TEXT("Failed");
+        NotifyDebugStateChanged();
         OnCharacterCreateFailed.Broadcast(TEXT("Karakter adi gereklidir."));
         return;
     }
 
     LastErrorMessage.Reset();
     CharacterStatus = TEXT("Creating");
+    NotifyDebugStateChanged();
     UE_LOG(LogTemp, Log, TEXT("[Backend] CreateCharacter starting. AccountId=%s CharacterName=%s ClassId=%s"),
         *TrimmedAccountId,
         *TrimmedCharacterName,
@@ -228,6 +243,7 @@ void UMOBAMMOBackendSubsystem::CreateCharacter(const FString& AccountId, const F
                 {
                     LastErrorMessage = TEXT("Karakter olusturma istegi basarisiz oldu.");
                     CharacterStatus = TEXT("Failed");
+                    NotifyDebugStateChanged();
                     OnCharacterCreateFailed.Broadcast(TEXT("Karakter olusturma istegi basarisiz oldu."));
                 });
                 return;
@@ -245,6 +261,7 @@ void UMOBAMMOBackendSubsystem::CreateCharacter(const FString& AccountId, const F
                 {
                     LastErrorMessage = ErrorMessage;
                     CharacterStatus = TEXT("Failed");
+                    NotifyDebugStateChanged();
                     OnCharacterCreateFailed.Broadcast(ErrorMessage);
                 });
                 return;
@@ -264,6 +281,7 @@ void UMOBAMMOBackendSubsystem::CreateCharacter(const FString& AccountId, const F
             RunOnGameThread([this, Result]()
             {
                 CharacterStatus = TEXT("Succeeded");
+                NotifyDebugStateChanged();
                 OnCharacterCreated.Broadcast(Result);
             });
         }
@@ -280,12 +298,14 @@ void UMOBAMMOBackendSubsystem::StartSession(const FString& CharacterId)
     {
         LastErrorMessage = TEXT("CharacterId gereklidir.");
         SessionStatus = TEXT("Failed");
+        NotifyDebugStateChanged();
         OnSessionStartFailed.Broadcast(TEXT("CharacterId gereklidir."));
         return;
     }
 
     LastErrorMessage.Reset();
     SessionStatus = TEXT("Starting");
+    NotifyDebugStateChanged();
     UE_LOG(LogTemp, Log, TEXT("[Backend] StartSession starting. CharacterId=%s"), *TrimmedCharacterId);
 
     TSharedRef<IHttpRequest, ESPMode::ThreadSafe> Request = FHttpModule::Get().CreateRequest();
@@ -307,6 +327,7 @@ void UMOBAMMOBackendSubsystem::StartSession(const FString& CharacterId)
                 {
                     LastErrorMessage = TEXT("Session baslatma istegi basarisiz oldu.");
                     SessionStatus = TEXT("Failed");
+                    NotifyDebugStateChanged();
                     OnSessionStartFailed.Broadcast(TEXT("Session baslatma istegi basarisiz oldu."));
                 });
                 return;
@@ -324,6 +345,7 @@ void UMOBAMMOBackendSubsystem::StartSession(const FString& CharacterId)
                 {
                     LastErrorMessage = ErrorMessage;
                     SessionStatus = TEXT("Failed");
+                    NotifyDebugStateChanged();
                     OnSessionStartFailed.Broadcast(ErrorMessage);
                 });
                 return;
@@ -337,6 +359,7 @@ void UMOBAMMOBackendSubsystem::StartSession(const FString& CharacterId)
                 {
                     LastErrorMessage = TEXT("Session yaniti eksik veya gecersiz.");
                     SessionStatus = TEXT("Failed");
+                    NotifyDebugStateChanged();
                     OnSessionStartFailed.Broadcast(TEXT("Session yaniti eksik veya gecersiz."));
                 });
                 return;
@@ -362,6 +385,7 @@ void UMOBAMMOBackendSubsystem::StartSession(const FString& CharacterId)
             RunOnGameThread([this, Result]()
             {
                 SessionStatus = TEXT("Ready");
+                NotifyDebugStateChanged();
                 OnSessionStarted.Broadcast(Result);
             });
         }
@@ -376,6 +400,7 @@ bool UMOBAMMOBackendSubsystem::TravelToSession(APlayerController* PlayerControll
     if (!PlayerController)
     {
         SessionStatus = TEXT("TravelFailed");
+        NotifyDebugStateChanged();
         return false;
     }
 
@@ -390,11 +415,13 @@ bool UMOBAMMOBackendSubsystem::TravelToSession(APlayerController* PlayerControll
     {
         UE_LOG(LogTemp, Error, TEXT("[Backend] TravelToSession aborted because connect string is empty."));
         SessionStatus = TEXT("TravelFailed");
+        NotifyDebugStateChanged();
         return false;
     }
 
     LastSessionConnectString = FinalConnectString;
     SessionStatus = TEXT("Traveling");
+    NotifyDebugStateChanged();
     PlayerController->ClientTravel(FinalConnectString, TRAVEL_Absolute);
     return true;
 }

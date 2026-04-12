@@ -78,6 +78,7 @@ DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FBackendLoginSuccessSignature, const
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FBackendCharacterCreatedSignature, const FBackendCharacterResult&, Result);
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FBackendSessionStartedSignature, const FBackendSessionResult&, Result);
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FBackendRequestFailedSignature, const FString&, ErrorMessage);
+DECLARE_DYNAMIC_MULTICAST_DELEGATE(FBackendDebugStateChangedSignature);
 
 UCLASS(BlueprintType)
 class MOBAMMO_API UMOBAMMOBackendSubsystem : public UGameInstanceSubsystem
@@ -104,6 +105,9 @@ public:
 
     UPROPERTY(BlueprintAssignable, Category="Backend")
     FBackendRequestFailedSignature OnSessionStartFailed;
+
+    UPROPERTY(BlueprintAssignable, Category="Backend|Debug")
+    FBackendDebugStateChangedSignature OnDebugStateChanged;
 
     UFUNCTION(BlueprintPure, Category="Backend")
     FString GetBackendBaseUrl() const;
@@ -159,4 +163,5 @@ private:
     FString BuildUrl(const FString& Path) const;
     bool TryReadJsonResponse(FHttpResponseHandle Response, TSharedPtr<FJsonObject>& OutObject, FString& OutError) const;
     FString BuildErrorMessage(FHttpResponseHandle Response, const FString& FallbackMessage) const;
+    void NotifyDebugStateChanged();
 };

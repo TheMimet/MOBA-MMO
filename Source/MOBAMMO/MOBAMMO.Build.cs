@@ -14,6 +14,7 @@ public class MOBAMMO : ModuleRules
                 "Engine",
                 "InputCore",
                 "EnhancedInput",
+                "UMG",
                 "HTTP",
                 "Json",
                 "JsonUtilities"
