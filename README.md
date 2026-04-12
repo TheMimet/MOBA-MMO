@@ -127,3 +127,33 @@ Relevant files:
 - `Source/MOBAMMO/MOBAMMOCharacterFlowWidget.h`
 - `Source/MOBAMMO/MOBAMMODebugOverlaySubsystem.cpp`
 - `Source/MOBAMMO/MOBAMMODebugOverlaySubsystem.h`
+
+#### Core Game UI Flow Bootstrap
+
+This update focused on introducing a real player-facing UI chain for login, loading, and in-game HUD instead of relying only on developer-facing overlays.
+
+What was added:
+
+- Added a native login screen widget with a clean local test-account entry point that drives the backend login flow.
+- Added a dedicated loading screen widget that reflects session startup and travel states separately from character selection.
+- Added a lightweight in-game HUD widget that shows the current replicated session context once the client has joined.
+- Added a `UMOBAMMOGameUISubsystem` that automatically creates and manages the login screen, loading screen, and HUD in local game worlds.
+- Added Blueprint fallback hooks for `/Game/WBP_LoginScreen`, `/Game/WBP_LoadingScreen`, and `/Game/WBP_GameHUD` so the art/UI layer can swap in Blueprint presentation later without changing the runtime flow code.
+- Narrowed the character flow widget so it now handles character selection only, while loading and gameplay presentation are handled by the new UI layer.
+
+Validated result:
+
+- `MOBAMMOEditor Win64 Development` builds successfully with the new UI subsystem and widgets.
+- The packaged staged client build/cook/stage completes successfully with the new UI flow code included.
+
+Relevant files:
+
+- `Source/MOBAMMO/MOBAMMOLoginScreenWidget.cpp`
+- `Source/MOBAMMO/MOBAMMOLoginScreenWidget.h`
+- `Source/MOBAMMO/MOBAMMOLoadingScreenWidget.cpp`
+- `Source/MOBAMMO/MOBAMMOLoadingScreenWidget.h`
+- `Source/MOBAMMO/MOBAMMOGameHUDWidget.cpp`
+- `Source/MOBAMMO/MOBAMMOGameHUDWidget.h`
+- `Source/MOBAMMO/MOBAMMOGameUISubsystem.cpp`
+- `Source/MOBAMMO/MOBAMMOGameUISubsystem.h`
+- `Source/MOBAMMO/MOBAMMOCharacterFlowWidget.cpp`

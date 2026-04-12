@@ -100,9 +100,7 @@ bool UMOBAMMOCharacterFlowWidget::ShouldBeVisible() const
 {
     if (const UMOBAMMOBackendSubsystem* BackendSubsystem = GetBackendSubsystem())
     {
-        return BackendSubsystem->IsWaitingForCharacterSelection()
-            || BackendSubsystem->GetSessionStatus() == TEXT("Starting")
-            || BackendSubsystem->GetSessionStatus() == TEXT("Traveling");
+        return BackendSubsystem->IsWaitingForCharacterSelection();
     }
 
     return false;
