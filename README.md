@@ -4,6 +4,210 @@ MOBA MMORG Gaming Development
 
 ## Development Log
 
+### 2026-04-13
+
+#### Player Controller ve Debug Yetenek Sistemi
+
+WASD hareket sisteminden bağımsız olarak, oyuncu kontrolcüsü artık sunucu otoritesine sahip debug yetenek tetikleyicileri içeriyor.
+
+Eklenenler:
+
+- `AMOBAMMOPlayerController` eklendi — `1-5` tuşlarıyla debug yeteneklerini tetikleyen, `6` ile hedef döndüren, `7` ile hedef temizleyen özel bir player controller.
+- Tüm yetenek tetikleyicileri `Server, Reliable` RPC'ler üzerinden çalışıyor; client tarafında authority kontrolü yapılıp uygun yoldan çağrılıyor.
+- Hedef seçme sistemi eklendi — `CycleToNextDebugTarget` ile GameState'teki tüm oyuncular arasında döngüsel hedef seçimi yapılıyor.
+- `GetSelectedTargetDisplayText` ile HUD'da seçilen hedefin ismini gösterme desteği eklendi.
+
+İlgili dosyalar:
+
+- `Source/MOBAMMO/MOBAMMOPlayerController.cpp`
+- `Source/MOBAMMO/MOBAMMOPlayerController.h`
+
+#### Yetenek Tanımlama Sistemi (Ability Set)
+
+İleride tam yetenek sistemi için temel oluşturacak bir yetenek tanımlama altyapısı eklendi.
+
+Eklenenler:
+
+- `EMOBAMMOAbilityKind` enum'u eklendi — `Damage`, `Heal`, `Utility`, `Respawn` türleri.
+- `FMOBAMMOAbilityDefinition` struct'ı eklendi — slot, tuş etiketi, isim, açıklama, mana maliyeti, bekleme süresi ve tür alanları.
+- 5 adet öntanımlı yetenek tanımlandı:
+  - **Arc Burst** (Slot 1) — Tek hedef hasar, 10 mana, 2s cooldown
+  - **Renew** (Slot 2) — Kendine iyileştirme, 8 mana, 4s cooldown
+  - **Drain Pulse** (Slot 3) — Hedeften mana çekme, 12 mana, 3s cooldown
+  - **Mana Surge** (Slot 4) — Mana yenileme patlaması, 0 mana, 6s cooldown
+  - **Reforge** (Slot 5) — Tam kaynaklarla yeniden doğma, 0 mana, 0s cooldown
+
+İlgili dosyalar:
+
+- `Source/MOBAMMO/MOBAMMOAbilitySet.h`
+
+#### Oyun İçi HUD Büyük Güncelleme
+
+Game HUD widget'ı basit bir durum panelinden tam teşekküllü bir MOBA HUD'una dönüştürüldü.
+
+Eklenenler:
+
+- Sağlık ve mana barları (`UProgressBar`) eklendi — hem oyuncu hem hedef için ayrı barlar.
+- Yetenek tepsisi (ability tray) eklendi — 5 yetenek slotu ile tuş etiketleri, cooldown barları ve cooldown süreleri gösteriliyor.
+- Hedef paneli eklendi — seçilen hedefin adı, sağlık/mana barları ve durumu gösteriliyor.
+- Savaş logu ve savaş olayı vurgulama sistemi eklendi — `CombatLogText` ve `CombatEventText` ile son olaylar gösteriliyor.
+- Roster (oyuncu listesi) paneli eklendi — sunucudaki tüm oyuncuların durumunu gösteriyor.
+- Yeniden doğma ipucu metni eklendi — ölü oyuncular için `[5] Reforge - Yeniden Doğ` uyarısı.
+- `bBoundToPlayerState`, `bBoundToGameState` takibi ile replicated state değişikliklerine dinamik bağlanma.
+- `NativeTick` ile savaş olayı vurgulama zamanlayıcısı yönetimi.
+
+İlgili dosyalar:
+
+- `Source/MOBAMMO/MOBAMMOGameHUDWidget.cpp`
+- `Source/MOBAMMO/MOBAMMOGameHUDWidget.h`
+
+#### WebUI Karakter Akış Entegrasyonu
+
+Karakter seçim ekranı tamamen yeniden yazıldı ve bir WebUI tabanlı yaklaşımla entegre edildi.
+
+Eklenenler:
+
+- Karakter akış widget'ı (`MOBAMMOCharacterFlowWidget`) WebUI entegrasyonu ile yeniden yapılandırıldı.
+- Karakter giriş widget'ı (`MOBAMMOCharacterEntryWidget`) güncellendi.
+- WebUI asset dosyaları eklendi — `Content/WebUI/` altında karakter önizleme görselleri, ikonlar ve 12 adet preset dosyası.
+- `scripts/run-character-flow-webui.ps1` scripti eklendi.
+
+İlgili dosyalar:
+
+- `Source/MOBAMMO/MOBAMMOCharacterFlowWidget.cpp`
+- `Source/MOBAMMO/MOBAMMOCharacterFlowWidget.h`
+- `Source/MOBAMMO/MOBAMMOCharacterEntryWidget.cpp`
+- `Content/WebUI/*`
+- `scripts/run-character-flow-webui.ps1`
+
+#### Paragon Aurora Karakter Asset'leri
+
+Epic Games'in Paragon projesinden Aurora karakterinin tüm asset'leri projeye eklendi.
+
+Eklenenler:
+
+- Aurora karakter mesh'leri, animasyonları, ve blueprint'leri — `Content/ParagonAurora/Characters/Heroes/Aurora/`
+- FX (efekt) sistemi — materyaller, parçacık sistemleri, niagara efektleri
+- Texture'lar — karakter dokuları, çevresel dokular, duman, kıvılcım, iz efektleri
+- Vector field'lar — `VF_RandomNoise_01_90`, `VF_Vortex_6`
+- Toplam ~1600 yeni asset dosyası (2.9 GB LFS)
+
+İlgili dosyalar:
+
+- `Content/ParagonAurora/*` (tüm alt dizinler)
+
+#### Input Action Yeniden Yapılandırma
+
+Tek eksenden (`IA_Move`) çift eksen giriş yapısına (`IA_MoveForward` + `IA_MoveRight`) geçiş yapıldı.
+
+Eklenenler:
+
+- `IA_MoveForward` ve `IA_MoveRight` input action'ları eklendi.
+- `IA_Move` input action'ı kaldırıldı.
+- `IA_Look` ve `IA_MouseLook` asset'leri güncellendi.
+- `IMC_Default` (Input Mapping Context) güncellendi.
+
+İlgili dosyalar:
+
+- `Content/Input/Actions/IA_MoveForward.uasset` [YENİ]
+- `Content/Input/Actions/IA_MoveRight.uasset` [YENİ]
+- `Content/Input/Actions/IA_Move.uasset` [SİLİNDİ]
+- `Content/Input/Actions/IA_Look.uasset`
+- `Content/Input/Actions/IA_MouseLook.uasset`
+- `Content/Input/IMC_Default.uasset`
+
+#### Login ve Loading Ekranı Güncellemeleri
+
+Login ve loading ekranlarının UI mantığı ve görünümü güncellendi.
+
+Eklenenler:
+
+- Login ekranı (`MOBAMMOLoginScreenWidget`) — arayüz düzeni ve oturum yönetimi mantığı yeniden düzenlendi.
+- Loading ekranı (`MOBAMMOLoadingScreenWidget`) — durum gösterge ve geçiş mantığı güncellendi.
+- Debug overlay subsystem'ı güncellendi — yeni UI akışına uyum sağlandı.
+- Game UI subsystem'ı güncellendi — ekran yönetimi ve geçiş mantığı iyileştirildi.
+
+İlgili dosyalar:
+
+- `Source/MOBAMMO/MOBAMMOLoginScreenWidget.cpp`
+- `Source/MOBAMMO/MOBAMMOLoginScreenWidget.h`
+- `Source/MOBAMMO/MOBAMMOLoadingScreenWidget.cpp`
+- `Source/MOBAMMO/MOBAMMOLoadingScreenWidget.h`
+- `Source/MOBAMMO/MOBAMMODebugOverlaySubsystem.cpp`
+- `Source/MOBAMMO/MOBAMMODebugOverlaySubsystem.h`
+- `Source/MOBAMMO/MOBAMMOGameUISubsystem.cpp`
+- `Source/MOBAMMO/MOBAMMOGameUISubsystem.h`
+
+#### GameMode, GameState ve PlayerState Oturum Yönetimi Genişletmeleri
+
+Sunucu taraflı oyun yönetimi ve replicated state sınıfları genişletildi.
+
+Eklenenler:
+
+- `AMOBAMMOGameMode` — debug büyü sistemi (`CastDebugDamageSpell`, `CastDebugHealSpell`, `CastDebugDrainSpell`), mana yenileme (`TriggerDebugManaRestore`), ve oyuncu yeniden doğma (`RespawnPlayer`) eklendi.
+- `AMOBAMMOPlayerState` — hedef seçimi (`SetSelectedTargetIdentity`, `ClearSelectedTarget`, `GetSelectedTargetName`, `GetSelectedTargetCharacterId`) eklendi.
+- `AMOBAMMOGameState` — bağlı oyuncu sayısı replikasyonu güncellendi.
+- Backend subsystem — oturum kimliği ve karakter bilgisi taşıma mantığı güncellendi.
+
+İlgili dosyalar:
+
+- `Source/MOBAMMO/MOBAMMOGameMode.cpp`
+- `Source/MOBAMMO/MOBAMMOGameMode.h`
+- `Source/MOBAMMO/MOBAMMOGameState.cpp`
+- `Source/MOBAMMO/MOBAMMOGameState.h`
+- `Source/MOBAMMO/MOBAMMOPlayerState.cpp`
+- `Source/MOBAMMO/MOBAMMOPlayerState.h`
+- `Source/MOBAMMO/MOBAMMOBackendSubsystem.cpp`
+- `Source/MOBAMMO/MOBAMMOBackendSubsystem.h`
+
+#### Başlatma Scripti ve Build/Run Güncellemeleri
+
+Projeyi tek komutla başlatma ve paketleme/çalıştırma scriptleri güncellendi.
+
+Eklenenler:
+
+- `baslat.bat` eklendi — veritabanını başlatır, backend sunucuyu yeni pencerede açar ve Unreal Editor'ı açar.
+- `scripts/build-cook-stage-client.ps1` ve `scripts/build-cook-stage-server.ps1` güncellendi.
+- `scripts/run-staged-client.ps1` ve `scripts/run-staged-server.ps1` güncellendi.
+- `MOBAMMO.uproject` güncellendi — yeni modül bağımlılıkları eklendi.
+- `MOBAMMO.Build.cs` güncellendi — yeni modül referansı eklendi.
+
+İlgili dosyalar:
+
+- `baslat.bat` [YENİ]
+- `scripts/build-cook-stage-client.ps1`
+- `scripts/build-cook-stage-server.ps1`
+- `scripts/run-staged-client.ps1`
+- `scripts/run-staged-server.ps1`
+- `MOBAMMO.uproject`
+- `Source/MOBAMMO/MOBAMMO.Build.cs`
+
+#### Sunucu Şema ve API Güncellemeleri
+
+Backend Prisma şeması ve karakter route'ları genişletildi.
+
+Eklenenler:
+
+- `server/prisma/schema.prisma` — yeni alanlar ve ilişki güncellemeleri.
+- `server/src/modules/characters/routes.ts` — karakter listeleme ve seçim için yeni endpoint'ler.
+
+İlgili dosyalar:
+
+- `server/prisma/schema.prisma`
+- `server/src/modules/characters/routes.ts`
+
+#### Blueprint Güncellemeleri
+
+- `BP_ThirdPersonCharacter` — yeni player controller ve input action referansları güncellendi.
+- `BP_ThirdPersonGameMode` — yeni C++ game mode sınıfına bağlantı güncellendi.
+
+İlgili dosyalar:
+
+- `Content/ThirdPerson/Blueprints/BP_ThirdPersonCharacter.uasset`
+- `Content/ThirdPerson/Blueprints/BP_ThirdPersonGameMode.uasset`
+
+---
+
 ### 2026-04-12
 
 #### Dedicated Server Join Flow Stabilization
