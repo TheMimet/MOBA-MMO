@@ -2,14 +2,12 @@
 
 #include "CoreMinimal.h"
 #include "Blueprint/UserWidget.h"
+#include "MOBAMMOBackendSubsystem.h"
 
 #include "MOBAMMOLoginScreenWidget.generated.h"
 
-class UBorder;
-class UButton;
-class UTextBlock;
-class UVerticalBox;
 class UMOBAMMOBackendSubsystem;
+class UWebBrowser;
 
 UCLASS(BlueprintType, Blueprintable)
 class MOBAMMO_API UMOBAMMOLoginScreenWidget : public UUserWidget
@@ -36,10 +34,9 @@ protected:
 private:
     void BuildLayout();
     void BindToSubsystem(UMOBAMMOBackendSubsystem* BackendSubsystem);
-    void UpdateTexts();
-
-    UFUNCTION()
-    void HandleLoginClicked();
+    void DispatchStateToBrowser();
+    FString BuildStateJson() const;
+    void HandleBrowserAction(const TSharedPtr<FJsonObject>& ActionObject);
 
     UFUNCTION()
     void HandleBackendStateChanged();
@@ -51,22 +48,12 @@ private:
     void HandleLoginFailed(const FString& ErrorMessage);
 
     UPROPERTY(Transient)
-    TObjectPtr<UBorder> RootBorder;
+    TObjectPtr<UWebBrowser> Browser;
 
-    UPROPERTY(Transient)
-    TObjectPtr<UTextBlock> TitleText;
+    UFUNCTION()
+    void HandleBrowserConsoleMessage(const FString& Message, const FString& Source, int32 Line);
 
-    UPROPERTY(Transient)
-    TObjectPtr<UTextBlock> SubtitleText;
-
-    UPROPERTY(Transient)
-    TObjectPtr<UTextBlock> StatusText;
-
-    UPROPERTY(Transient)
-    TObjectPtr<UTextBlock> ErrorText;
-
-    UPROPERTY(Transient)
-    TObjectPtr<UButton> LoginButton;
+    FString LastPushedStateJson;
 
     bool bBoundToSubsystem = false;
 };

@@ -2,6 +2,10 @@
 
 #include "Blueprint/WidgetTree.h"
 #include "Components/Border.h"
+#include "Components/Overlay.h"
+#include "Components/OverlaySlot.h"
+#include "Components/SizeBox.h"
+#include "Components/Spacer.h"
 #include "Components/TextBlock.h"
 #include "Components/VerticalBox.h"
 #include "Components/VerticalBoxSlot.h"
@@ -81,16 +85,38 @@ void UMOBAMMOLoadingScreenWidget::BuildLayout()
         return;
     }
 
+    UOverlay* RootOverlay = WidgetTree->ConstructWidget<UOverlay>(UOverlay::StaticClass());
+    WidgetTree->RootWidget = RootOverlay;
+
+    UBorder* Background = WidgetTree->ConstructWidget<UBorder>(UBorder::StaticClass());
+    Background->SetBrushColor(FLinearColor(0.01f, 0.02f, 0.05f, 0.94f));
+    if (UOverlaySlot* BackgroundSlot = RootOverlay->AddChildToOverlay(Background))
+    {
+        BackgroundSlot->SetHorizontalAlignment(HAlign_Fill);
+        BackgroundSlot->SetVerticalAlignment(VAlign_Fill);
+    }
+
+    USizeBox* PanelSizeBox = WidgetTree->ConstructWidget<USizeBox>(USizeBox::StaticClass());
+    PanelSizeBox->SetWidthOverride(600.0f);
+    if (UOverlaySlot* PanelSlot = RootOverlay->AddChildToOverlay(PanelSizeBox))
+    {
+        PanelSlot->SetHorizontalAlignment(HAlign_Center);
+        PanelSlot->SetVerticalAlignment(VAlign_Center);
+        PanelSlot->SetPadding(FMargin(24.0f));
+    }
+
     RootBorder = WidgetTree->ConstructWidget<UBorder>(UBorder::StaticClass());
-    RootBorder->SetBrushColor(FLinearColor(0.01f, 0.02f, 0.05f, 0.92f));
-    RootBorder->SetPadding(FMargin(40.0f));
-    WidgetTree->RootWidget = RootBorder;
+    RootBorder->SetBrushColor(FLinearColor(0.04f, 0.08f, 0.12f, 0.92f));
+    RootBorder->SetPadding(FMargin(36.0f, 32.0f));
+    PanelSizeBox->SetContent(RootBorder);
 
     UVerticalBox* Layout = WidgetTree->ConstructWidget<UVerticalBox>(UVerticalBox::StaticClass());
     RootBorder->SetContent(Layout);
 
-    TitleText = MakeLoadingText(WidgetTree, Layout, TEXT("Preparing Session"), 30, FLinearColor(0.92f, 0.96f, 1.0f, 1.0f));
-    StatusText = MakeLoadingText(WidgetTree, Layout, TEXT("Please wait..."), 18, FLinearColor(0.78f, 0.85f, 0.92f, 1.0f));
+    MakeLoadingText(WidgetTree, Layout, TEXT("TRANSFER STATE"), 13, FLinearColor(0.44f, 0.82f, 0.73f, 1.0f));
+    TitleText = MakeLoadingText(WidgetTree, Layout, TEXT("Preparing Session"), 34, FLinearColor(0.96f, 0.98f, 1.0f, 1.0f));
+    StatusText = MakeLoadingText(WidgetTree, Layout, TEXT("Please wait..."), 18, FLinearColor(0.80f, 0.86f, 0.92f, 1.0f));
+    HintText = MakeLoadingText(WidgetTree, Layout, TEXT("Backend session and dedicated server handoff are in progress."), 14, FLinearColor(0.60f, 0.69f, 0.76f, 1.0f));
 }
 
 void UMOBAMMOLoadingScreenWidget::BindToSubsystem(UMOBAMMOBackendSubsystem* BackendSubsystem)
@@ -122,6 +148,11 @@ void UMOBAMMOLoadingScreenWidget::UpdateTexts()
     if (StatusText)
     {
         StatusText->SetText(FText::FromString(DisplayText));
+    }
+
+    if (HintText)
+    {
+        HintText->SetText(FText::FromString(FString::Printf(TEXT("Phase: %s"), *SessionStatus)));
     }
 }
 

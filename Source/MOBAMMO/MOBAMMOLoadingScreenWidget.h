@@ -45,5 +45,8 @@ private:
     UPROPERTY(Transient)
     TObjectPtr<UTextBlock> StatusText;
 
+    UPROPERTY(Transient)
+    TObjectPtr<UTextBlock> HintText;
+
     bool bBoundToSubsystem = false;
 };

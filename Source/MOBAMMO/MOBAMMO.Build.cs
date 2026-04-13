@@ -15,6 +15,7 @@ public class MOBAMMO : ModuleRules
                 "InputCore",
                 "EnhancedInput",
                 "UMG",
+                "WebBrowserWidget",
                 "HTTP",
                 "Json",
                 "JsonUtilities"

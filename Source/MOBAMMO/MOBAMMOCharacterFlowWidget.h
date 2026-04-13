@@ -6,12 +6,8 @@
 
 #include "MOBAMMOCharacterFlowWidget.generated.h"
 
-class UBorder;
-class UButton;
-class UTextBlock;
-class UVerticalBox;
-class UMOBAMMOCharacterEntryWidget;
 class UMOBAMMOBackendSubsystem;
+class UWebBrowser;
 
 UCLASS(BlueprintType, Blueprintable)
 class MOBAMMO_API UMOBAMMOCharacterFlowWidget : public UUserWidget
@@ -41,8 +37,9 @@ protected:
 private:
     void BuildLayout();
     void BindToSubsystem(UMOBAMMOBackendSubsystem* BackendSubsystem);
-    void RebuildCharacterButtons();
-    void UpdateHeaderText();
+    void DispatchStateToBrowser();
+    FString BuildStateJson() const;
+    void HandleBrowserAction(const TSharedPtr<FJsonObject>& ActionObject);
 
     UFUNCTION()
     void HandleLoginSucceeded(const FBackendLoginResult& Result);
@@ -63,46 +60,13 @@ private:
     void HandleRequestFailed(const FString& ErrorMessage);
 
     UFUNCTION()
-    void HandleCreateCharacterClicked();
-
-    UFUNCTION()
-    void HandleStartSessionClicked();
-
-    UFUNCTION()
-    void HandleRefreshCharactersClicked();
-
-    UFUNCTION()
-    void HandleCharacterEntrySelected(const FString& CharacterId);
+    void HandleBrowserConsoleMessage(const FString& Message, const FString& Source, int32 Line);
 
     UPROPERTY(Transient)
-    TObjectPtr<UBorder> RootBorder;
+    TObjectPtr<UWebBrowser> Browser;
 
-    UPROPERTY(Transient)
-    TObjectPtr<UTextBlock> TitleText;
-
-    UPROPERTY(Transient)
-    TObjectPtr<UTextBlock> SubtitleText;
-
-    UPROPERTY(Transient)
-    TObjectPtr<UTextBlock> StatusText;
-
-    UPROPERTY(Transient)
-    TObjectPtr<UVerticalBox> CharacterListBox;
-
-    UPROPERTY(Transient)
-    TObjectPtr<UButton> CreateCharacterButton;
-
-    UPROPERTY(Transient)
-    TObjectPtr<UButton> RefreshCharactersButton;
-
-    UPROPERTY(Transient)
-    TObjectPtr<UButton> StartSessionButton;
-
-    UPROPERTY(Transient)
-    TArray<TObjectPtr<UMOBAMMOCharacterEntryWidget>> CharacterEntryWidgets;
-
-    UPROPERTY(Transient)
-    TArray<FBackendCharacterResult> RenderedCharacters;
+    FString LastPushedStateJson;
 
     bool bBoundToSubsystem = false;
+    bool bAutoStartSessionAfterCharacterCreate = false;
 };

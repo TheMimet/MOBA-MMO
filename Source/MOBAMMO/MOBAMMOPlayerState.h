@@ -72,6 +72,114 @@ public:
     UFUNCTION(BlueprintPure, Category="MOBAMMO|Replication")
     float GetMaxMana() const { return MaxMana; }
 
+    UFUNCTION(BlueprintCallable, Category="MOBAMMO|Replication")
+    void RecordKill();
+
+    UFUNCTION(BlueprintCallable, Category="MOBAMMO|Replication")
+    void RecordDeath();
+
+    UFUNCTION(BlueprintPure, Category="MOBAMMO|Replication")
+    int32 GetKills() const { return KillCount; }
+
+    UFUNCTION(BlueprintPure, Category="MOBAMMO|Replication")
+    int32 GetDeaths() const { return DeathCount; }
+
+    UFUNCTION(BlueprintCallable, Category="MOBAMMO|Replication")
+    void SetSelectedTargetIdentity(const FString& InCharacterId, const FString& InCharacterName);
+
+    UFUNCTION(BlueprintCallable, Category="MOBAMMO|Replication")
+    void ClearSelectedTarget();
+
+    UFUNCTION(BlueprintPure, Category="MOBAMMO|Replication")
+    FString GetSelectedTargetCharacterId() const { return SelectedTargetCharacterId; }
+
+    UFUNCTION(BlueprintPure, Category="MOBAMMO|Replication")
+    FString GetSelectedTargetName() const { return SelectedTargetName; }
+
+    UFUNCTION(BlueprintCallable, Category="MOBAMMO|Replication")
+    void StartDamageCooldown(float CooldownDuration, float ServerWorldTimeSeconds);
+
+    UFUNCTION(BlueprintCallable, Category="MOBAMMO|Replication")
+    void StartHealCooldown(float CooldownDuration, float ServerWorldTimeSeconds);
+
+    UFUNCTION(BlueprintPure, Category="MOBAMMO|Replication")
+    float GetDamageCooldownEndServerTime() const { return DamageCooldownEndServerTime; }
+
+    UFUNCTION(BlueprintPure, Category="MOBAMMO|Replication")
+    float GetHealCooldownEndServerTime() const { return HealCooldownEndServerTime; }
+
+    UFUNCTION(BlueprintPure, Category="MOBAMMO|Replication")
+    float GetDrainCooldownEndServerTime() const { return DrainCooldownEndServerTime; }
+
+    UFUNCTION(BlueprintPure, Category="MOBAMMO|Replication")
+    float GetManaSurgeCooldownEndServerTime() const { return ManaSurgeCooldownEndServerTime; }
+
+    UFUNCTION(BlueprintPure, Category="MOBAMMO|Replication")
+    float GetDamageCooldownRemaining(float ServerWorldTimeSeconds) const;
+
+    UFUNCTION(BlueprintPure, Category="MOBAMMO|Replication")
+    float GetHealCooldownRemaining(float ServerWorldTimeSeconds) const;
+
+    UFUNCTION(BlueprintPure, Category="MOBAMMO|Replication")
+    float GetDrainCooldownRemaining(float ServerWorldTimeSeconds) const;
+
+    UFUNCTION(BlueprintPure, Category="MOBAMMO|Replication")
+    float GetManaSurgeCooldownRemaining(float ServerWorldTimeSeconds) const;
+
+    UFUNCTION(BlueprintPure, Category="MOBAMMO|Replication")
+    bool IsDamageSpellReady(float ServerWorldTimeSeconds) const;
+
+    UFUNCTION(BlueprintPure, Category="MOBAMMO|Replication")
+    bool IsHealSpellReady(float ServerWorldTimeSeconds) const;
+
+    UFUNCTION(BlueprintPure, Category="MOBAMMO|Replication")
+    bool IsDrainSpellReady(float ServerWorldTimeSeconds) const;
+
+    UFUNCTION(BlueprintPure, Category="MOBAMMO|Replication")
+    bool IsManaSurgeReady(float ServerWorldTimeSeconds) const;
+
+    UFUNCTION(BlueprintCallable, Category="MOBAMMO|Replication")
+    void StartDrainCooldown(float CooldownDuration, float ServerWorldTimeSeconds);
+
+    UFUNCTION(BlueprintCallable, Category="MOBAMMO|Replication")
+    void StartManaSurgeCooldown(float CooldownDuration, float ServerWorldTimeSeconds);
+
+    UFUNCTION(BlueprintCallable, Category="MOBAMMO|Replication")
+    void StartArcCharge(float DurationSeconds, float ServerWorldTimeSeconds);
+
+    UFUNCTION(BlueprintPure, Category="MOBAMMO|Replication")
+    float GetArcChargeEndServerTime() const { return ArcChargeEndServerTime; }
+
+    UFUNCTION(BlueprintPure, Category="MOBAMMO|Replication")
+    float GetArcChargeRemaining(float ServerWorldTimeSeconds) const;
+
+    UFUNCTION(BlueprintPure, Category="MOBAMMO|Replication")
+    bool HasArcCharge(float ServerWorldTimeSeconds) const;
+
+    UFUNCTION(BlueprintCallable, Category="MOBAMMO|Replication")
+    void StartRespawnCooldown(float CooldownDuration, float ServerWorldTimeSeconds);
+
+    UFUNCTION(BlueprintPure, Category="MOBAMMO|Replication")
+    float GetRespawnAvailableServerTime() const { return RespawnAvailableServerTime; }
+
+    UFUNCTION(BlueprintPure, Category="MOBAMMO|Replication")
+    float GetRespawnCooldownRemaining(float ServerWorldTimeSeconds) const;
+
+    UFUNCTION(BlueprintPure, Category="MOBAMMO|Replication")
+    bool CanRespawn(float ServerWorldTimeSeconds) const;
+
+    UFUNCTION(BlueprintCallable, Category="MOBAMMO|Replication")
+    void PushIncomingCombatFeedback(const FString& InFeedbackText, float DurationSeconds, bool bIsHealingFeedback);
+
+    UFUNCTION(BlueprintPure, Category="MOBAMMO|Replication")
+    FString GetIncomingCombatFeedbackText() const { return IncomingCombatFeedbackText; }
+
+    UFUNCTION(BlueprintPure, Category="MOBAMMO|Replication")
+    float GetIncomingCombatFeedbackEndServerTime() const { return IncomingCombatFeedbackEndServerTime; }
+
+    UFUNCTION(BlueprintPure, Category="MOBAMMO|Replication")
+    bool IsIncomingCombatFeedbackHealing() const { return bIncomingCombatFeedbackHealing; }
+
     virtual void GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const override;
 
 protected:
@@ -102,12 +210,57 @@ protected:
     UPROPERTY(ReplicatedUsing=OnRep_Attributes, BlueprintReadOnly, Category="MOBAMMO|Replication")
     float MaxMana = 50.0f;
 
+    UPROPERTY(ReplicatedUsing=OnRep_Attributes, BlueprintReadOnly, Category="MOBAMMO|Replication")
+    float DamageCooldownEndServerTime = 0.0f;
+
+    UPROPERTY(ReplicatedUsing=OnRep_Attributes, BlueprintReadOnly, Category="MOBAMMO|Replication")
+    float HealCooldownEndServerTime = 0.0f;
+
+    UPROPERTY(ReplicatedUsing=OnRep_Attributes, BlueprintReadOnly, Category="MOBAMMO|Replication")
+    float DrainCooldownEndServerTime = 0.0f;
+
+    UPROPERTY(ReplicatedUsing=OnRep_Attributes, BlueprintReadOnly, Category="MOBAMMO|Replication")
+    float ManaSurgeCooldownEndServerTime = 0.0f;
+
+    UPROPERTY(ReplicatedUsing=OnRep_Attributes, BlueprintReadOnly, Category="MOBAMMO|Replication")
+    float ArcChargeEndServerTime = 0.0f;
+
+    UPROPERTY(ReplicatedUsing=OnRep_Attributes, BlueprintReadOnly, Category="MOBAMMO|Replication")
+    int32 KillCount = 0;
+
+    UPROPERTY(ReplicatedUsing=OnRep_Attributes, BlueprintReadOnly, Category="MOBAMMO|Replication")
+    int32 DeathCount = 0;
+
+    UPROPERTY(ReplicatedUsing=OnRep_Attributes, BlueprintReadOnly, Category="MOBAMMO|Replication")
+    float RespawnAvailableServerTime = 0.0f;
+
+    UPROPERTY(ReplicatedUsing=OnRep_TargetSelection, BlueprintReadOnly, Category="MOBAMMO|Replication")
+    FString SelectedTargetCharacterId;
+
+    UPROPERTY(ReplicatedUsing=OnRep_TargetSelection, BlueprintReadOnly, Category="MOBAMMO|Replication")
+    FString SelectedTargetName;
+
+    UPROPERTY(ReplicatedUsing=OnRep_CombatFeedback, BlueprintReadOnly, Category="MOBAMMO|Replication")
+    FString IncomingCombatFeedbackText;
+
+    UPROPERTY(ReplicatedUsing=OnRep_CombatFeedback, BlueprintReadOnly, Category="MOBAMMO|Replication")
+    float IncomingCombatFeedbackEndServerTime = 0.0f;
+
+    UPROPERTY(ReplicatedUsing=OnRep_CombatFeedback, BlueprintReadOnly, Category="MOBAMMO|Replication")
+    bool bIncomingCombatFeedbackHealing = false;
+
 private:
     UFUNCTION()
     void OnRep_PlayerIdentity();
 
     UFUNCTION()
     void OnRep_Attributes();
+
+    UFUNCTION()
+    void OnRep_TargetSelection();
+
+    UFUNCTION()
+    void OnRep_CombatFeedback();
 
     void BroadcastStateUpdated();
 };

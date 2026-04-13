@@ -219,7 +219,7 @@ void UMOBAMMOBackendSubsystem::MockLogin(const FString& Username)
     }
 }
 
-void UMOBAMMOBackendSubsystem::CreateCharacter(const FString& AccountId, const FString& CharacterName, const FString& ClassId)
+void UMOBAMMOBackendSubsystem::CreateCharacter(const FString& AccountId, const FString& CharacterName, const FString& ClassId, int32 PresetId, int32 ColorIndex, int32 Shade, int32 Transparent, int32 TextureDetail)
 {
     if (!CanRunCharacterFlowAction(TEXT("Karakter olusturma artik secim akisi uzerinden yapilmali."), OnCharacterCreateFailed, CharacterStatus))
     {
@@ -262,10 +262,15 @@ void UMOBAMMOBackendSubsystem::CreateCharacter(const FString& AccountId, const F
     Request->SetHeader(TEXT("Content-Type"), TEXT("application/json"));
     Request->SetContentAsString(
         FString::Printf(
-            TEXT("{\"accountId\":\"%s\",\"name\":\"%s\",\"classId\":\"%s\"}"),
+            TEXT("{\"accountId\":\"%s\",\"name\":\"%s\",\"classId\":\"%s\",\"presetId\":%d,\"colorIndex\":%d,\"shade\":%d,\"transparent\":%d,\"textureDetail\":%d}"),
             *TrimmedAccountId.ReplaceCharWithEscapedChar(),
             *TrimmedCharacterName.ReplaceCharWithEscapedChar(),
-            *TrimmedClassId.ReplaceCharWithEscapedChar()
+            *TrimmedClassId.ReplaceCharWithEscapedChar(),
+            PresetId,
+            ColorIndex,
+            Shade,
+            Transparent,
+            TextureDetail
         )
     );
 
@@ -334,10 +339,10 @@ void UMOBAMMOBackendSubsystem::CreateCharacter(const FString& AccountId, const F
     UE_LOG(LogTemp, Log, TEXT("[Backend] CreateCharacter ProcessRequest returned %s"), bRequestStarted ? TEXT("true") : TEXT("false"));
 }
 
-void UMOBAMMOBackendSubsystem::CreateCharacterForCurrentAccount(const FString& CharacterName, const FString& ClassId)
+void UMOBAMMOBackendSubsystem::CreateCharacterForCurrentAccount(const FString& CharacterName, const FString& ClassId, int32 PresetId, int32 ColorIndex, int32 Shade, int32 Transparent, int32 TextureDetail)
 {
     bCharacterFlowActionAuthorized = true;
-    CreateCharacter(LastAccountId, CharacterName, ClassId);
+    CreateCharacter(LastAccountId, CharacterName, ClassId, PresetId, ColorIndex, Shade, Transparent, TextureDetail);
 }
 
 void UMOBAMMOBackendSubsystem::ListCharacters(const FString& AccountId)
@@ -591,6 +596,22 @@ bool UMOBAMMOBackendSubsystem::TravelToSession(APlayerController* PlayerControll
     NotifyDebugStateChanged();
     PlayerController->ClientTravel(BuildReplicatedTravelConnectString(FinalConnectString), TRAVEL_Absolute);
     return true;
+}
+
+void UMOBAMMOBackendSubsystem::NotifyClientEnteredSessionWorld()
+{
+    const UWorld* World = GetWorld();
+    if (!World || World->GetNetMode() != NM_Client)
+    {
+        return;
+    }
+
+    if (SessionStatus == TEXT("Traveling") || SessionStatus == TEXT("Ready"))
+    {
+        SessionStatus = TEXT("Active");
+        LastErrorMessage.Reset();
+        NotifyDebugStateChanged();
+    }
 }
 
 FString UMOBAMMOBackendSubsystem::BuildReplicatedTravelConnectString(const FString& ConnectString) const

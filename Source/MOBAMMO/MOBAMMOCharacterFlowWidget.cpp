@@ -1,316 +1,310 @@
 #include "MOBAMMOCharacterFlowWidget.h"
 
 #include "Blueprint/WidgetTree.h"
-#include "Components/Border.h"
-#include "Components/Button.h"
-#include "Components/TextBlock.h"
-#include "Components/VerticalBox.h"
-#include "Components/VerticalBoxSlot.h"
+#include "Dom/JsonObject.h"
 #include "GameFramework/PlayerController.h"
-#include "MOBAMMOCharacterEntryWidget.h"
+#include "JsonObjectConverter.h"
+#include "Serialization/JsonReader.h"
+#include "Serialization/JsonSerializer.h"
+#include "WebBrowser.h"
 
 namespace
 {
-    UTextBlock* MakeText(UWidgetTree* WidgetTree, UVerticalBox* Parent, const FString& Text, int32 FontSize = 20, const FLinearColor& Color = FLinearColor::White)
-    {
-        UTextBlock* Label = WidgetTree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass());
-        Label->SetText(FText::FromString(Text));
-        Label->SetColorAndOpacity(FSlateColor(Color));
-        Label->SetAutoWrapText(true);
+	const TCHAR* CharacterFlowUrl = TEXT("http://127.0.0.1:3002/character-creator");
+	const TCHAR* ActionPrefix = TEXT("UE_ACTION:");
 
-        FSlateFontInfo FontInfo = Label->GetFont();
-        FontInfo.Size = FontSize;
-        Label->SetFont(FontInfo);
-
-        if (UVerticalBoxSlot* Slot = Parent->AddChildToVerticalBox(Label))
-        {
-            Slot->SetPadding(FMargin(0.0f, 4.0f));
-        }
-
-        return Label;
-    }
-
-    UButton* MakeButton(UWidgetTree* WidgetTree, UVerticalBox* Parent, const FString& Text)
-    {
-        UButton* Button = WidgetTree->ConstructWidget<UButton>(UButton::StaticClass());
-        UTextBlock* Label = WidgetTree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass());
-        Label->SetText(FText::FromString(Text));
-        Label->SetColorAndOpacity(FSlateColor(FLinearColor::White));
-        Button->AddChild(Label);
-
-        if (UVerticalBoxSlot* Slot = Parent->AddChildToVerticalBox(Button))
-        {
-            Slot->SetPadding(FMargin(0.0f, 6.0f));
-        }
-
-        return Button;
-    }
-
-    FString BuildSessionPhaseText(UMOBAMMOBackendSubsystem* BackendSubsystem)
-    {
-        if (!BackendSubsystem)
-        {
-            return TEXT("Preparing flow.");
-        }
-
-        if (BackendSubsystem->GetSessionStatus() == TEXT("Starting"))
-        {
-            return TEXT("Starting session and reserving a server slot...");
-        }
-
-        if (BackendSubsystem->GetSessionStatus() == TEXT("Traveling"))
-        {
-            return TEXT("Joining dedicated server...");
-        }
-
-        if (BackendSubsystem->IsWaitingForCharacterSelection())
-        {
-            return TEXT("Select an existing character or create a default one before entering the session.");
-        }
-
-        return TEXT("Preparing your multiplayer session.");
-    }
+	FString SerializeJsonObject(const TSharedRef<FJsonObject>& Object)
+	{
+		FString Output;
+		TSharedRef<TJsonWriter<>> Writer = TJsonWriterFactory<>::Create(&Output);
+		FJsonSerializer::Serialize(Object, Writer);
+		return Output;
+	}
 }
 
 void UMOBAMMOCharacterFlowWidget::NativeOnInitialized()
 {
-    Super::NativeOnInitialized();
-    BuildLayout();
+	Super::NativeOnInitialized();
+	BuildLayout();
 
-    if (UMOBAMMOBackendSubsystem* BackendSubsystem = GetBackendSubsystem())
-    {
-        BindToSubsystem(BackendSubsystem);
-    }
+	if (UMOBAMMOBackendSubsystem* BackendSubsystem = GetBackendSubsystem())
+	{
+		BindToSubsystem(BackendSubsystem);
+	}
 }
 
 void UMOBAMMOCharacterFlowWidget::NativeConstruct()
 {
-    Super::NativeConstruct();
-    RefreshFromBackend();
+	Super::NativeConstruct();
+	RefreshFromBackend();
 }
 
 void UMOBAMMOCharacterFlowWidget::RefreshFromBackend()
 {
-    UpdateHeaderText();
-    RebuildCharacterButtons();
-    SetVisibility(ShouldBeVisible() ? ESlateVisibility::Visible : ESlateVisibility::Collapsed);
+	if (Browser && Browser->GetUrl().IsEmpty())
+	{
+		Browser->LoadURL(CharacterFlowUrl);
+	}
+
+	DispatchStateToBrowser();
+	SetVisibility(ShouldBeVisible() ? ESlateVisibility::Visible : ESlateVisibility::Collapsed);
 }
 
 bool UMOBAMMOCharacterFlowWidget::ShouldBeVisible() const
 {
-    if (const UMOBAMMOBackendSubsystem* BackendSubsystem = GetBackendSubsystem())
-    {
-        return BackendSubsystem->IsWaitingForCharacterSelection();
-    }
+	if (const UMOBAMMOBackendSubsystem* BackendSubsystem = GetBackendSubsystem())
+	{
+		return BackendSubsystem->IsWaitingForCharacterSelection();
+	}
 
-    return false;
+	return false;
 }
 
 UMOBAMMOBackendSubsystem* UMOBAMMOCharacterFlowWidget::GetBackendSubsystem() const
 {
-    if (UGameInstance* GameInstance = GetGameInstance())
-    {
-        return GameInstance->GetSubsystem<UMOBAMMOBackendSubsystem>();
-    }
+	if (UGameInstance* GameInstance = GetGameInstance())
+	{
+		return GameInstance->GetSubsystem<UMOBAMMOBackendSubsystem>();
+	}
 
-    return nullptr;
+	return nullptr;
 }
 
 void UMOBAMMOCharacterFlowWidget::BuildLayout()
 {
-    if (!WidgetTree || WidgetTree->RootWidget)
-    {
-        return;
-    }
+	if (WidgetTree->RootWidget)
+	{
+		return;
+	}
 
-    RootBorder = WidgetTree->ConstructWidget<UBorder>(UBorder::StaticClass());
-    RootBorder->SetBrushColor(FLinearColor(0.01f, 0.02f, 0.04f, 0.92f));
-    RootBorder->SetPadding(FMargin(28.0f));
-    WidgetTree->RootWidget = RootBorder;
+	Browser = WidgetTree->ConstructWidget<UWebBrowser>(UWebBrowser::StaticClass(), TEXT("CharacterFlowBrowser"));
+	if (!Browser)
+	{
+		return;
+	}
 
-    UVerticalBox* Layout = WidgetTree->ConstructWidget<UVerticalBox>(UVerticalBox::StaticClass());
-    RootBorder->SetContent(Layout);
-
-    TitleText = MakeText(WidgetTree, Layout, TEXT("Character Select"), 30, FLinearColor(0.85f, 0.95f, 1.0f, 1.0f));
-    SubtitleText = MakeText(WidgetTree, Layout, TEXT("Choose a character or create a new one."), 16, FLinearColor(0.75f, 0.82f, 0.9f, 1.0f));
-    StatusText = MakeText(WidgetTree, Layout, TEXT("Status: Waiting"), 16, FLinearColor(0.9f, 0.9f, 0.7f, 1.0f));
-
-    CharacterListBox = WidgetTree->ConstructWidget<UVerticalBox>(UVerticalBox::StaticClass());
-    if (UVerticalBoxSlot* ListSlot = Layout->AddChildToVerticalBox(CharacterListBox))
-    {
-        ListSlot->SetPadding(FMargin(0.0f, 12.0f));
-    }
-
-    RefreshCharactersButton = MakeButton(WidgetTree, Layout, TEXT("Refresh Characters"));
-    RefreshCharactersButton->OnClicked.AddDynamic(this, &UMOBAMMOCharacterFlowWidget::HandleRefreshCharactersClicked);
-
-    CreateCharacterButton = MakeButton(WidgetTree, Layout, TEXT("Create Default Character"));
-    CreateCharacterButton->OnClicked.AddDynamic(this, &UMOBAMMOCharacterFlowWidget::HandleCreateCharacterClicked);
-
-    StartSessionButton = MakeButton(WidgetTree, Layout, TEXT("Continue With Selected Character"));
-    StartSessionButton->OnClicked.AddDynamic(this, &UMOBAMMOCharacterFlowWidget::HandleStartSessionClicked);
+	Browser->OnConsoleMessage.AddDynamic(this, &UMOBAMMOCharacterFlowWidget::HandleBrowserConsoleMessage);
+	Browser->LoadURL(CharacterFlowUrl);
+	WidgetTree->RootWidget = Browser;
 }
 
 void UMOBAMMOCharacterFlowWidget::BindToSubsystem(UMOBAMMOBackendSubsystem* BackendSubsystem)
 {
-    if (!BackendSubsystem || bBoundToSubsystem)
-    {
-        return;
-    }
+	if (!BackendSubsystem || bBoundToSubsystem)
+	{
+		return;
+	}
 
-    BackendSubsystem->OnDebugStateChanged.AddDynamic(this, &UMOBAMMOCharacterFlowWidget::HandleBackendStateChanged);
-    BackendSubsystem->OnLoginSucceeded.AddDynamic(this, &UMOBAMMOCharacterFlowWidget::HandleLoginSucceeded);
-    BackendSubsystem->OnCharactersLoaded.AddDynamic(this, &UMOBAMMOCharacterFlowWidget::HandleCharactersLoaded);
-    BackendSubsystem->OnCharacterCreated.AddDynamic(this, &UMOBAMMOCharacterFlowWidget::HandleCharacterCreated);
-    BackendSubsystem->OnSessionStarted.AddDynamic(this, &UMOBAMMOCharacterFlowWidget::HandleSessionStarted);
-    BackendSubsystem->OnLoginFailed.AddDynamic(this, &UMOBAMMOCharacterFlowWidget::HandleRequestFailed);
-    BackendSubsystem->OnCharactersLoadFailed.AddDynamic(this, &UMOBAMMOCharacterFlowWidget::HandleRequestFailed);
-    BackendSubsystem->OnCharacterCreateFailed.AddDynamic(this, &UMOBAMMOCharacterFlowWidget::HandleRequestFailed);
-    BackendSubsystem->OnSessionStartFailed.AddDynamic(this, &UMOBAMMOCharacterFlowWidget::HandleRequestFailed);
-    bBoundToSubsystem = true;
+	BackendSubsystem->OnLoginSucceeded.AddDynamic(this, &UMOBAMMOCharacterFlowWidget::HandleLoginSucceeded);
+	BackendSubsystem->OnDebugStateChanged.AddDynamic(this, &UMOBAMMOCharacterFlowWidget::HandleBackendStateChanged);
+	BackendSubsystem->OnCharactersLoaded.AddDynamic(this, &UMOBAMMOCharacterFlowWidget::HandleCharactersLoaded);
+	BackendSubsystem->OnCharacterCreated.AddDynamic(this, &UMOBAMMOCharacterFlowWidget::HandleCharacterCreated);
+	BackendSubsystem->OnSessionStarted.AddDynamic(this, &UMOBAMMOCharacterFlowWidget::HandleSessionStarted);
+	BackendSubsystem->OnLoginFailed.AddDynamic(this, &UMOBAMMOCharacterFlowWidget::HandleRequestFailed);
+	BackendSubsystem->OnCharactersLoadFailed.AddDynamic(this, &UMOBAMMOCharacterFlowWidget::HandleRequestFailed);
+	BackendSubsystem->OnCharacterCreateFailed.AddDynamic(this, &UMOBAMMOCharacterFlowWidget::HandleRequestFailed);
+	BackendSubsystem->OnSessionStartFailed.AddDynamic(this, &UMOBAMMOCharacterFlowWidget::HandleRequestFailed);
+	bBoundToSubsystem = true;
 }
 
-void UMOBAMMOCharacterFlowWidget::RebuildCharacterButtons()
+void UMOBAMMOCharacterFlowWidget::DispatchStateToBrowser()
 {
-    if (!WidgetTree || !CharacterListBox)
-    {
-        return;
-    }
+	if (!Browser)
+	{
+		return;
+	}
 
-    CharacterListBox->ClearChildren();
-    CharacterEntryWidgets.Reset();
-    RenderedCharacters = GetBackendSubsystem() ? GetBackendSubsystem()->GetCachedCharacters() : TArray<FBackendCharacterResult>{};
+	const FString StateJson = BuildStateJson();
+	LastPushedStateJson = StateJson;
 
-    if (RenderedCharacters.Num() == 0)
-    {
-        MakeText(WidgetTree, CharacterListBox, TEXT("No characters found yet."), 16, FLinearColor(0.75f, 0.75f, 0.75f, 1.0f));
-    }
-    else
-    {
-        const FString SelectedCharacterId = GetBackendSubsystem() ? GetBackendSubsystem()->GetSelectedCharacterId() : FString();
-        for (int32 Index = 0; Index < RenderedCharacters.Num(); ++Index)
-        {
-            const FBackendCharacterResult& Character = RenderedCharacters[Index];
-            const bool bSelected = Character.CharacterId == SelectedCharacterId;
-            const FString Label = FString::Printf(TEXT("%s  |  %s  |  Level %d%s"),
-                *Character.Name,
-                *Character.ClassId,
-                Character.Level,
-                bSelected ? TEXT("  [Selected]") : TEXT(""));
+	const FString Script = FString::Printf(
+		TEXT("window.__UE_STATE__=%s;window.dispatchEvent(new CustomEvent('ue-state',{detail:%s}));"),
+		*StateJson,
+		*StateJson
+	);
 
-            UMOBAMMOCharacterEntryWidget* EntryWidget = WidgetTree->ConstructWidget<UMOBAMMOCharacterEntryWidget>(UMOBAMMOCharacterEntryWidget::StaticClass());
-            EntryWidget->ConfigureEntry(Character.CharacterId, Label, bSelected);
-            EntryWidget->OnEntrySelected.AddDynamic(this, &UMOBAMMOCharacterFlowWidget::HandleCharacterEntrySelected);
-            if (UVerticalBoxSlot* EntrySlot = CharacterListBox->AddChildToVerticalBox(EntryWidget))
-            {
-                EntrySlot->SetPadding(FMargin(0.0f, 6.0f));
-            }
-            CharacterEntryWidgets.Add(EntryWidget);
-        }
-    }
-
-    if (StartSessionButton)
-    {
-        StartSessionButton->SetIsEnabled(GetBackendSubsystem() && !GetBackendSubsystem()->GetSelectedCharacterId().IsEmpty());
-    }
+	Browser->ExecuteJavascript(Script);
 }
 
-void UMOBAMMOCharacterFlowWidget::UpdateHeaderText()
+FString UMOBAMMOCharacterFlowWidget::BuildStateJson() const
 {
-    UMOBAMMOBackendSubsystem* BackendSubsystem = GetBackendSubsystem();
-    if (!BackendSubsystem)
-    {
-        return;
-    }
+	const UMOBAMMOBackendSubsystem* BackendSubsystem = GetBackendSubsystem();
+	const TSharedRef<FJsonObject> RootObject = MakeShared<FJsonObject>();
 
-    if (TitleText)
-    {
-        TitleText->SetText(FText::FromString(TEXT("Character Select")));
-    }
+	RootObject->SetStringField(TEXT("defaultCharacterName"), DefaultCharacterName);
+	RootObject->SetStringField(TEXT("defaultClassId"), DefaultClassId);
 
-    if (SubtitleText)
-    {
-        const FString Subtitle = BuildSessionPhaseText(BackendSubsystem);
-        SubtitleText->SetText(FText::FromString(Subtitle));
-    }
+	if (!BackendSubsystem)
+	{
+		return SerializeJsonObject(RootObject);
+	}
 
-    if (StatusText)
-    {
-        const FString StatusLine = FString::Printf(TEXT("Login: %s | Characters: %s | Session: %s"),
-            *BackendSubsystem->GetLoginStatus(),
-            *BackendSubsystem->GetCharacterListStatus(),
-            *BackendSubsystem->GetSessionStatus());
-        StatusText->SetText(FText::FromString(StatusLine));
-    }
+	RootObject->SetStringField(TEXT("backendBaseUrl"), BackendSubsystem->GetBackendBaseUrl());
+	RootObject->SetStringField(TEXT("loginStatus"), BackendSubsystem->GetLoginStatus());
+	RootObject->SetStringField(TEXT("characterListStatus"), BackendSubsystem->GetCharacterListStatus());
+	RootObject->SetStringField(TEXT("characterStatus"), BackendSubsystem->GetCharacterStatus());
+	RootObject->SetStringField(TEXT("sessionStatus"), BackendSubsystem->GetSessionStatus());
+	RootObject->SetStringField(TEXT("lastError"), BackendSubsystem->GetLastErrorMessage());
+	RootObject->SetStringField(TEXT("accountId"), BackendSubsystem->GetLastAccountId());
+	RootObject->SetStringField(TEXT("selectedCharacterId"), BackendSubsystem->GetSelectedCharacterId());
+
+	TArray<TSharedPtr<FJsonValue>> CharacterValues;
+	for (const FBackendCharacterResult& Character : BackendSubsystem->GetCachedCharacters())
+	{
+		const TSharedRef<FJsonObject> CharacterObject = MakeShared<FJsonObject>();
+		CharacterObject->SetStringField(TEXT("characterId"), Character.CharacterId);
+		CharacterObject->SetStringField(TEXT("name"), Character.Name);
+		CharacterObject->SetStringField(TEXT("classId"), Character.ClassId);
+		CharacterObject->SetNumberField(TEXT("level"), Character.Level);
+		CharacterValues.Add(MakeShared<FJsonValueObject>(CharacterObject));
+	}
+
+	RootObject->SetArrayField(TEXT("characters"), CharacterValues);
+	return SerializeJsonObject(RootObject);
+}
+
+void UMOBAMMOCharacterFlowWidget::HandleBrowserAction(const TSharedPtr<FJsonObject>& ActionObject)
+{
+	if (!ActionObject.IsValid())
+	{
+		return;
+	}
+
+	UMOBAMMOBackendSubsystem* BackendSubsystem = GetBackendSubsystem();
+	if (!BackendSubsystem)
+	{
+		return;
+	}
+
+	FString ActionType;
+	if (!ActionObject->TryGetStringField(TEXT("type"), ActionType))
+	{
+		return;
+	}
+
+	if (ActionType == TEXT("ready"))
+	{
+		DispatchStateToBrowser();
+		return;
+	}
+
+	if (ActionType == TEXT("refreshCharacters"))
+	{
+		BackendSubsystem->ListCharacters(BackendSubsystem->GetLastAccountId());
+		return;
+	}
+
+	if (ActionType == TEXT("selectCharacter"))
+	{
+		FString CharacterId;
+		if (ActionObject->TryGetStringField(TEXT("characterId"), CharacterId))
+		{
+			BackendSubsystem->SelectCharacter(CharacterId);
+		}
+		return;
+	}
+
+	if (ActionType == TEXT("createCharacter"))
+	{
+		FString CharacterName = DefaultCharacterName;
+		FString ClassId = DefaultClassId;
+		int32 PresetId = 4;
+		int32 ColorIndex = 0;
+		int32 Shade = 58;
+		int32 Transparent = 18;
+		int32 TextureDetail = 88;
+		double NumericValue = 0.0;
+		bool bAutoEnter = false;
+
+		ActionObject->TryGetStringField(TEXT("name"), CharacterName);
+		ActionObject->TryGetStringField(TEXT("classId"), ClassId);
+		ActionObject->TryGetBoolField(TEXT("autoEnter"), bAutoEnter);
+		if (ActionObject->TryGetNumberField(TEXT("presetId"), NumericValue)) { PresetId = FMath::RoundToInt(NumericValue); }
+		if (ActionObject->TryGetNumberField(TEXT("colorIndex"), NumericValue)) { ColorIndex = FMath::RoundToInt(NumericValue); }
+		if (ActionObject->TryGetNumberField(TEXT("shade"), NumericValue)) { Shade = FMath::RoundToInt(NumericValue); }
+		if (ActionObject->TryGetNumberField(TEXT("transparent"), NumericValue)) { Transparent = FMath::RoundToInt(NumericValue); }
+		if (ActionObject->TryGetNumberField(TEXT("textureDetail"), NumericValue)) { TextureDetail = FMath::RoundToInt(NumericValue); }
+
+		bAutoStartSessionAfterCharacterCreate = bAutoEnter;
+		BackendSubsystem->CreateCharacterForCurrentAccount(CharacterName, ClassId, PresetId, ColorIndex, Shade, Transparent, TextureDetail);
+		return;
+	}
+
+	if (ActionType == TEXT("startSession"))
+	{
+		FString CharacterId;
+		if (ActionObject->TryGetStringField(TEXT("characterId"), CharacterId) && !CharacterId.IsEmpty())
+		{
+			BackendSubsystem->SelectCharacter(CharacterId);
+		}
+
+		BackendSubsystem->StartSessionForSelectedCharacter();
+	}
 }
 
 void UMOBAMMOCharacterFlowWidget::HandleLoginSucceeded(const FBackendLoginResult& Result)
 {
-    RefreshFromBackend();
+	RefreshFromBackend();
 }
 
 void UMOBAMMOCharacterFlowWidget::HandleBackendStateChanged()
 {
-    RefreshFromBackend();
+	RefreshFromBackend();
 }
 
 void UMOBAMMOCharacterFlowWidget::HandleCharactersLoaded(const FBackendCharacterListResult& Result)
 {
-    RefreshFromBackend();
+	RefreshFromBackend();
 }
 
 void UMOBAMMOCharacterFlowWidget::HandleCharacterCreated(const FBackendCharacterResult& Result)
 {
-    RefreshFromBackend();
+	if (bAutoStartSessionAfterCharacterCreate)
+	{
+		bAutoStartSessionAfterCharacterCreate = false;
+		if (UMOBAMMOBackendSubsystem* BackendSubsystem = GetBackendSubsystem())
+		{
+			BackendSubsystem->StartSessionForSelectedCharacter();
+		}
+	}
+
+	RefreshFromBackend();
 }
 
 void UMOBAMMOCharacterFlowWidget::HandleSessionStarted(const FBackendSessionResult& Result)
 {
-    if (UMOBAMMOBackendSubsystem* BackendSubsystem = GetBackendSubsystem())
-    {
-        if (APlayerController* PlayerController = GetOwningPlayer())
-        {
-            BackendSubsystem->TravelToSession(PlayerController, Result.ConnectString);
-        }
-    }
+	if (UMOBAMMOBackendSubsystem* BackendSubsystem = GetBackendSubsystem())
+	{
+		if (APlayerController* PlayerController = GetOwningPlayer())
+		{
+			BackendSubsystem->TravelToSession(PlayerController, Result.ConnectString);
+		}
+	}
 
-    RefreshFromBackend();
+	RefreshFromBackend();
 }
 
 void UMOBAMMOCharacterFlowWidget::HandleRequestFailed(const FString& ErrorMessage)
 {
-    RefreshFromBackend();
+	bAutoStartSessionAfterCharacterCreate = false;
+	RefreshFromBackend();
 }
 
-void UMOBAMMOCharacterFlowWidget::HandleCreateCharacterClicked()
+void UMOBAMMOCharacterFlowWidget::HandleBrowserConsoleMessage(const FString& Message, const FString& Source, int32 Line)
 {
-    if (UMOBAMMOBackendSubsystem* BackendSubsystem = GetBackendSubsystem())
-    {
-        BackendSubsystem->CreateCharacterForCurrentAccount(DefaultCharacterName, DefaultClassId);
-    }
-}
+	if (!Message.StartsWith(ActionPrefix))
+	{
+		return;
+	}
 
-void UMOBAMMOCharacterFlowWidget::HandleStartSessionClicked()
-{
-    if (UMOBAMMOBackendSubsystem* BackendSubsystem = GetBackendSubsystem())
-    {
-        BackendSubsystem->StartSessionForSelectedCharacter();
-    }
-}
+	const FString Payload = Message.RightChop(FCString::Strlen(ActionPrefix));
+	TSharedPtr<FJsonObject> ActionObject;
+	TSharedRef<TJsonReader<>> Reader = TJsonReaderFactory<>::Create(Payload);
+	if (!FJsonSerializer::Deserialize(Reader, ActionObject) || !ActionObject.IsValid())
+	{
+		UE_LOG(LogTemp, Warning, TEXT("[CharacterFlow] Failed to parse browser action payload: %s"), *Payload);
+		return;
+	}
 
-void UMOBAMMOCharacterFlowWidget::HandleRefreshCharactersClicked()
-{
-    if (UMOBAMMOBackendSubsystem* BackendSubsystem = GetBackendSubsystem())
-    {
-        BackendSubsystem->ListCharacters(BackendSubsystem->GetLastAccountId());
-    }
-}
-
-void UMOBAMMOCharacterFlowWidget::HandleCharacterEntrySelected(const FString& CharacterId)
-{
-    if (UMOBAMMOBackendSubsystem* BackendSubsystem = GetBackendSubsystem())
-    {
-        BackendSubsystem->SelectCharacter(CharacterId);
-        RefreshFromBackend();
-    }
+	HandleBrowserAction(ActionObject);
 }

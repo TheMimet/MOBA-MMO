@@ -23,6 +23,7 @@ private:
     bool Tick(float DeltaTime);
     bool CanCreateWidgets(UWorld* World) const;
     void EnsureWidgets(class APlayerController* PlayerController);
+    void ReconcileSessionState(class APlayerController* PlayerController);
     void UpdateWidgetVisibility(class APlayerController* PlayerController);
 
     TSubclassOf<UMOBAMMOLoginScreenWidget> ResolveLoginWidgetClass() const;

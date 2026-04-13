@@ -4,6 +4,11 @@ interface CreateCharacterBody {
   accountId?: string;
   name?: string;
   classId?: string;
+  presetId?: number;
+  colorIndex?: number;
+  shade?: number;
+  transparent?: number;
+  textureDetail?: number;
 }
 
 interface CharacterListQuery {
@@ -90,6 +95,11 @@ export const registerCharacterRoutes: FastifyPluginAsync = async (app) => {
           name: true,
           classId: true,
           level: true,
+          presetId: true,
+          colorIndex: true,
+          shade: true,
+          transparent: true,
+          textureDetail: true,
         },
       });
 
@@ -102,6 +112,11 @@ export const registerCharacterRoutes: FastifyPluginAsync = async (app) => {
           accountId,
           classId,
           name,
+          presetId: request.body.presetId ?? 4,
+          colorIndex: request.body.colorIndex ?? 0,
+          shade: request.body.shade ?? 58,
+          transparent: request.body.transparent ?? 18,
+          textureDetail: request.body.textureDetail ?? 88,
           stats: {
             create: {},
           },
@@ -111,6 +126,11 @@ export const registerCharacterRoutes: FastifyPluginAsync = async (app) => {
           name: true,
           classId: true,
           level: true,
+          presetId: true,
+          colorIndex: true,
+          shade: true,
+          transparent: true,
+          textureDetail: true,
         },
       });
 

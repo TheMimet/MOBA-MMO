@@ -1,191 +1,225 @@
 #include "MOBAMMOLoginScreenWidget.h"
 
 #include "Blueprint/WidgetTree.h"
-#include "Components/Border.h"
-#include "Components/Button.h"
-#include "Components/TextBlock.h"
-#include "Components/VerticalBox.h"
-#include "Components/VerticalBoxSlot.h"
-#include "MOBAMMOBackendSubsystem.h"
+#include "Dom/JsonObject.h"
+#include "Serialization/JsonReader.h"
+#include "Serialization/JsonSerializer.h"
+#include "WebBrowser.h"
 
 namespace
 {
-    UTextBlock* MakeLoginText(UWidgetTree* WidgetTree, UVerticalBox* Parent, const FString& Text, int32 FontSize = 20, const FLinearColor& Color = FLinearColor::White)
-    {
-        UTextBlock* Label = WidgetTree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass());
-        Label->SetText(FText::FromString(Text));
-        Label->SetColorAndOpacity(FSlateColor(Color));
-        Label->SetAutoWrapText(true);
+	const TCHAR* LoginScreenUrl = TEXT("http://127.0.0.1:3002/login");
+	const TCHAR* ActionPrefix = TEXT("UE_ACTION:");
 
-        FSlateFontInfo FontInfo = Label->GetFont();
-        FontInfo.Size = FontSize;
-        Label->SetFont(FontInfo);
-
-        if (UVerticalBoxSlot* Slot = Parent->AddChildToVerticalBox(Label))
-        {
-            Slot->SetPadding(FMargin(0.0f, 5.0f));
-        }
-
-        return Label;
-    }
-
-    UButton* MakeLoginButton(UWidgetTree* WidgetTree, UVerticalBox* Parent, const FString& Text)
-    {
-        UButton* Button = WidgetTree->ConstructWidget<UButton>(UButton::StaticClass());
-        UTextBlock* Label = WidgetTree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass());
-        Label->SetText(FText::FromString(Text));
-        Label->SetColorAndOpacity(FSlateColor(FLinearColor::White));
-        Button->AddChild(Label);
-
-        if (UVerticalBoxSlot* Slot = Parent->AddChildToVerticalBox(Button))
-        {
-            Slot->SetPadding(FMargin(0.0f, 10.0f));
-        }
-
-        return Button;
-    }
+	FString SerializeJsonObject(const TSharedRef<FJsonObject>& Object)
+	{
+		FString Output;
+		TSharedRef<TJsonWriter<>> Writer = TJsonWriterFactory<>::Create(&Output);
+		FJsonSerializer::Serialize(Object, Writer);
+		return Output;
+	}
 }
 
 void UMOBAMMOLoginScreenWidget::NativeOnInitialized()
 {
-    Super::NativeOnInitialized();
-    BuildLayout();
+	Super::NativeOnInitialized();
+	BuildLayout();
 
-    if (UMOBAMMOBackendSubsystem* BackendSubsystem = GetBackendSubsystem())
-    {
-        BindToSubsystem(BackendSubsystem);
-    }
+	if (UMOBAMMOBackendSubsystem* BackendSubsystem = GetBackendSubsystem())
+	{
+		BindToSubsystem(BackendSubsystem);
+	}
 }
 
 void UMOBAMMOLoginScreenWidget::NativeConstruct()
 {
-    Super::NativeConstruct();
-    RefreshFromBackend();
+	Super::NativeConstruct();
+	RefreshFromBackend();
 }
 
 void UMOBAMMOLoginScreenWidget::RefreshFromBackend()
 {
-    UpdateTexts();
-    SetVisibility(ShouldBeVisible() ? ESlateVisibility::Visible : ESlateVisibility::Collapsed);
+	if (Browser && Browser->GetUrl().IsEmpty())
+	{
+		Browser->LoadURL(LoginScreenUrl);
+	}
+
+	DispatchStateToBrowser();
+	SetVisibility(ShouldBeVisible() ? ESlateVisibility::Visible : ESlateVisibility::Collapsed);
 }
 
 bool UMOBAMMOLoginScreenWidget::ShouldBeVisible() const
 {
-    const UMOBAMMOBackendSubsystem* BackendSubsystem = GetBackendSubsystem();
-    if (!BackendSubsystem)
-    {
-        return true;
-    }
+	const UMOBAMMOBackendSubsystem* BackendSubsystem = GetBackendSubsystem();
+	if (!BackendSubsystem)
+	{
+		return true;
+	}
 
-    const UWorld* World = GetWorld();
-    const ENetMode NetMode = World ? World->GetNetMode() : NM_Standalone;
-    if (NetMode == NM_Client)
-    {
-        return false;
-    }
+	const UWorld* World = GetWorld();
+	const ENetMode NetMode = World ? World->GetNetMode() : NM_Standalone;
+	if (NetMode == NM_Client)
+	{
+		return false;
+	}
 
-    if (BackendSubsystem->IsWaitingForCharacterSelection())
-    {
-        return false;
-    }
+	if (BackendSubsystem->IsWaitingForCharacterSelection())
+	{
+		return false;
+	}
 
-    if (BackendSubsystem->GetSessionStatus() == TEXT("Starting") || BackendSubsystem->GetSessionStatus() == TEXT("Traveling"))
-    {
-        return false;
-    }
+	if (BackendSubsystem->GetSessionStatus() == TEXT("Starting") || BackendSubsystem->GetSessionStatus() == TEXT("Traveling"))
+	{
+		return false;
+	}
 
-    const FString LoginStatus = BackendSubsystem->GetLoginStatus();
-    return LoginStatus.IsEmpty() || LoginStatus == TEXT("Idle") || LoginStatus == TEXT("LoggingIn") || LoginStatus == TEXT("Failed");
+	const FString LoginStatus = BackendSubsystem->GetLoginStatus();
+	return LoginStatus.IsEmpty() || LoginStatus == TEXT("Idle") || LoginStatus == TEXT("LoggingIn") || LoginStatus == TEXT("Failed");
 }
 
 UMOBAMMOBackendSubsystem* UMOBAMMOLoginScreenWidget::GetBackendSubsystem() const
 {
-    if (UGameInstance* GameInstance = GetGameInstance())
-    {
-        return GameInstance->GetSubsystem<UMOBAMMOBackendSubsystem>();
-    }
+	if (UGameInstance* GameInstance = GetGameInstance())
+	{
+		return GameInstance->GetSubsystem<UMOBAMMOBackendSubsystem>();
+	}
 
-    return nullptr;
+	return nullptr;
 }
 
 void UMOBAMMOLoginScreenWidget::BuildLayout()
 {
-    if (!WidgetTree || WidgetTree->RootWidget)
-    {
-        return;
-    }
+	if (WidgetTree->RootWidget)
+	{
+		return;
+	}
 
-    RootBorder = WidgetTree->ConstructWidget<UBorder>(UBorder::StaticClass());
-    RootBorder->SetBrushColor(FLinearColor(0.02f, 0.03f, 0.06f, 0.94f));
-    RootBorder->SetPadding(FMargin(40.0f));
-    WidgetTree->RootWidget = RootBorder;
+	Browser = WidgetTree->ConstructWidget<UWebBrowser>(UWebBrowser::StaticClass(), TEXT("LoginScreenBrowser"));
+	if (!Browser)
+	{
+		return;
+	}
 
-    UVerticalBox* Layout = WidgetTree->ConstructWidget<UVerticalBox>(UVerticalBox::StaticClass());
-    RootBorder->SetContent(Layout);
-
-    TitleText = MakeLoginText(WidgetTree, Layout, TEXT("MOBA MMO"), 34, FLinearColor(0.90f, 0.96f, 1.0f, 1.0f));
-    SubtitleText = MakeLoginText(WidgetTree, Layout, TEXT("Sign in to continue to character selection."), 18, FLinearColor(0.76f, 0.84f, 0.92f, 1.0f));
-    StatusText = MakeLoginText(WidgetTree, Layout, TEXT("Status: Idle"), 16, FLinearColor(0.94f, 0.92f, 0.70f, 1.0f));
-    ErrorText = MakeLoginText(WidgetTree, Layout, TEXT("Error: -"), 15, FLinearColor(1.0f, 0.65f, 0.65f, 1.0f));
-
-    LoginButton = MakeLoginButton(WidgetTree, Layout, TEXT("Continue With Local Test Account"));
-    LoginButton->OnClicked.AddDynamic(this, &UMOBAMMOLoginScreenWidget::HandleLoginClicked);
+	Browser->OnConsoleMessage.AddDynamic(this, &UMOBAMMOLoginScreenWidget::HandleBrowserConsoleMessage);
+	Browser->LoadURL(LoginScreenUrl);
+	WidgetTree->RootWidget = Browser;
 }
 
 void UMOBAMMOLoginScreenWidget::BindToSubsystem(UMOBAMMOBackendSubsystem* BackendSubsystem)
 {
-    if (!BackendSubsystem || bBoundToSubsystem)
-    {
-        return;
-    }
+	if (!BackendSubsystem || bBoundToSubsystem)
+	{
+		return;
+	}
 
-    BackendSubsystem->OnDebugStateChanged.AddDynamic(this, &UMOBAMMOLoginScreenWidget::HandleBackendStateChanged);
-    BackendSubsystem->OnLoginSucceeded.AddDynamic(this, &UMOBAMMOLoginScreenWidget::HandleLoginSucceeded);
-    BackendSubsystem->OnLoginFailed.AddDynamic(this, &UMOBAMMOLoginScreenWidget::HandleLoginFailed);
-    bBoundToSubsystem = true;
+	BackendSubsystem->OnDebugStateChanged.AddDynamic(this, &UMOBAMMOLoginScreenWidget::HandleBackendStateChanged);
+	BackendSubsystem->OnLoginSucceeded.AddDynamic(this, &UMOBAMMOLoginScreenWidget::HandleLoginSucceeded);
+	BackendSubsystem->OnLoginFailed.AddDynamic(this, &UMOBAMMOLoginScreenWidget::HandleLoginFailed);
+	bBoundToSubsystem = true;
 }
 
-void UMOBAMMOLoginScreenWidget::UpdateTexts()
+void UMOBAMMOLoginScreenWidget::DispatchStateToBrowser()
 {
-    const UMOBAMMOBackendSubsystem* BackendSubsystem = GetBackendSubsystem();
-    const FString LoginStatus = BackendSubsystem ? BackendSubsystem->GetLoginStatus() : TEXT("Unavailable");
-    const FString ErrorMessage = BackendSubsystem ? BackendSubsystem->GetLastErrorMessage() : FString();
+	if (!Browser)
+	{
+		return;
+	}
 
-    if (StatusText)
-    {
-        StatusText->SetText(FText::FromString(FString::Printf(TEXT("Status: %s"), *LoginStatus)));
-    }
+	const FString StateJson = BuildStateJson();
+	LastPushedStateJson = StateJson;
 
-    if (ErrorText)
-    {
-        ErrorText->SetText(FText::FromString(FString::Printf(TEXT("Error: %s"), ErrorMessage.IsEmpty() ? TEXT("-") : *ErrorMessage)));
-    }
+	const FString Script = FString::Printf(
+		TEXT("window.__UE_STATE__=%s;window.dispatchEvent(new CustomEvent('ue-state',{detail:%s}));"),
+		*StateJson,
+		*StateJson
+	);
 
-    if (LoginButton)
-    {
-        LoginButton->SetIsEnabled(LoginStatus != TEXT("LoggingIn"));
-    }
+	Browser->ExecuteJavascript(Script);
 }
 
-void UMOBAMMOLoginScreenWidget::HandleLoginClicked()
+FString UMOBAMMOLoginScreenWidget::BuildStateJson() const
 {
-    if (UMOBAMMOBackendSubsystem* BackendSubsystem = GetBackendSubsystem())
-    {
-        BackendSubsystem->MockLogin(DefaultUsername);
-    }
+	const TSharedRef<FJsonObject> RootObject = MakeShared<FJsonObject>();
+	RootObject->SetStringField(TEXT("defaultUsername"), DefaultUsername);
+
+	const UMOBAMMOBackendSubsystem* BackendSubsystem = GetBackendSubsystem();
+	if (!BackendSubsystem)
+	{
+		return SerializeJsonObject(RootObject);
+	}
+
+	RootObject->SetStringField(TEXT("backendBaseUrl"), BackendSubsystem->GetBackendBaseUrl());
+	RootObject->SetStringField(TEXT("loginStatus"), BackendSubsystem->GetLoginStatus());
+	RootObject->SetStringField(TEXT("characterListStatus"), BackendSubsystem->GetCharacterListStatus());
+	RootObject->SetStringField(TEXT("sessionStatus"), BackendSubsystem->GetSessionStatus());
+	RootObject->SetStringField(TEXT("lastError"), BackendSubsystem->GetLastErrorMessage());
+	RootObject->SetStringField(TEXT("lastUsername"), BackendSubsystem->GetLastUsername());
+	return SerializeJsonObject(RootObject);
+}
+
+void UMOBAMMOLoginScreenWidget::HandleBrowserAction(const TSharedPtr<FJsonObject>& ActionObject)
+{
+	if (!ActionObject.IsValid())
+	{
+		return;
+	}
+
+	UMOBAMMOBackendSubsystem* BackendSubsystem = GetBackendSubsystem();
+	if (!BackendSubsystem)
+	{
+		return;
+	}
+
+	FString ActionType;
+	if (!ActionObject->TryGetStringField(TEXT("type"), ActionType))
+	{
+		return;
+	}
+
+	if (ActionType == TEXT("ready"))
+	{
+		DispatchStateToBrowser();
+		return;
+	}
+
+	if (ActionType == TEXT("mockLogin"))
+	{
+		FString Username = DefaultUsername;
+		ActionObject->TryGetStringField(TEXT("username"), Username);
+		BackendSubsystem->MockLogin(Username);
+	}
 }
 
 void UMOBAMMOLoginScreenWidget::HandleBackendStateChanged()
 {
-    RefreshFromBackend();
+	RefreshFromBackend();
 }
 
 void UMOBAMMOLoginScreenWidget::HandleLoginSucceeded(const FBackendLoginResult& Result)
 {
-    RefreshFromBackend();
+	RefreshFromBackend();
 }
 
 void UMOBAMMOLoginScreenWidget::HandleLoginFailed(const FString& ErrorMessage)
 {
-    RefreshFromBackend();
+	RefreshFromBackend();
+}
+
+void UMOBAMMOLoginScreenWidget::HandleBrowserConsoleMessage(const FString& Message, const FString& Source, int32 Line)
+{
+	if (!Message.StartsWith(ActionPrefix))
+	{
+		return;
+	}
+
+	const FString Payload = Message.RightChop(FCString::Strlen(ActionPrefix));
+	TSharedPtr<FJsonObject> ActionObject;
+	TSharedRef<TJsonReader<>> Reader = TJsonReaderFactory<>::Create(Payload);
+	if (!FJsonSerializer::Deserialize(Reader, ActionObject) || !ActionObject.IsValid())
+	{
+		UE_LOG(LogTemp, Warning, TEXT("[LoginScreen] Failed to parse browser action payload: %s"), *Payload);
+		return;
+	}
+
+	HandleBrowserAction(ActionObject);
 }

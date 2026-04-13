@@ -135,10 +135,10 @@ public:
     void ListCharacters(const FString& AccountId);
 
     UFUNCTION(BlueprintCallable, Category="Backend")
-    void CreateCharacter(const FString& AccountId, const FString& CharacterName, const FString& ClassId);
+    void CreateCharacter(const FString& AccountId, const FString& CharacterName, const FString& ClassId, int32 PresetId = 4, int32 ColorIndex = 0, int32 Shade = 58, int32 Transparent = 18, int32 TextureDetail = 88);
 
     UFUNCTION(BlueprintCallable, Category="Backend")
-    void CreateCharacterForCurrentAccount(const FString& CharacterName, const FString& ClassId);
+    void CreateCharacterForCurrentAccount(const FString& CharacterName, const FString& ClassId, int32 PresetId = 4, int32 ColorIndex = 0, int32 Shade = 58, int32 Transparent = 18, int32 TextureDetail = 88);
 
     UFUNCTION(BlueprintCallable, Category="Backend")
     void StartSession(const FString& CharacterId);
@@ -151,6 +151,9 @@ public:
 
     UFUNCTION(BlueprintCallable, Category="Backend")
     bool TravelToSession(APlayerController* PlayerController, const FString& ConnectString);
+
+    UFUNCTION(BlueprintCallable, Category="Backend")
+    void NotifyClientEnteredSessionWorld();
 
     UFUNCTION(BlueprintPure, Category="Backend")
     FString BuildReplicatedTravelConnectString(const FString& ConnectString) const;

@@ -5,6 +5,7 @@
 #include "Engine/LocalPlayer.h"
 #include "Engine/World.h"
 #include "GameFramework/PlayerController.h"
+#include "MOBAMMOBackendSubsystem.h"
 #include "MOBAMMOGameHUDWidget.h"
 #include "MOBAMMOLoginScreenWidget.h"
 #include "MOBAMMOLoadingScreenWidget.h"
@@ -83,6 +84,7 @@ bool UMOBAMMOGameUISubsystem::Tick(float DeltaTime)
     }
 
     EnsureWidgets(PlayerController);
+    ReconcileSessionState(PlayerController);
     UpdateWidgetVisibility(PlayerController);
     return true;
 #endif
@@ -134,11 +136,41 @@ void UMOBAMMOGameUISubsystem::EnsureWidgets(APlayerController* PlayerController)
     }
 }
 
+void UMOBAMMOGameUISubsystem::ReconcileSessionState(APlayerController* PlayerController)
+{
+    if (!PlayerController)
+    {
+        return;
+    }
+
+    UGameInstance* GameInstance = GetGameInstance();
+    UMOBAMMOBackendSubsystem* BackendSubsystem = GameInstance ? GameInstance->GetSubsystem<UMOBAMMOBackendSubsystem>() : nullptr;
+    if (!BackendSubsystem)
+    {
+        return;
+    }
+
+    UWorld* World = PlayerController->GetWorld();
+    if (!World || World->GetNetMode() != NM_Client)
+    {
+        return;
+    }
+
+    if (!PlayerController->GetPawn())
+    {
+        return;
+    }
+
+    BackendSubsystem->NotifyClientEnteredSessionWorld();
+}
+
 void UMOBAMMOGameUISubsystem::UpdateWidgetVisibility(APlayerController* PlayerController)
 {
     const bool bLoadingVisible = LoadingWidget && LoadingWidget->ShouldBeVisible();
     const bool bLoginVisible = LoginWidget && LoginWidget->ShouldBeVisible();
     const bool bHUDVisible = HUDWidget && HUDWidget->ShouldBeVisible();
+    const UMOBAMMOBackendSubsystem* BackendSubsystem = GetGameInstance() ? GetGameInstance()->GetSubsystem<UMOBAMMOBackendSubsystem>() : nullptr;
+    const bool bCharacterFlowVisible = BackendSubsystem && BackendSubsystem->IsWaitingForCharacterSelection();
 
     if (LoginWidget)
     {
@@ -155,7 +187,7 @@ void UMOBAMMOGameUISubsystem::UpdateWidgetVisibility(APlayerController* PlayerCo
         HUDWidget->RefreshFromBackend();
     }
 
-    const bool bNeedsCursor = bLoginVisible || bLoadingVisible;
+    const bool bNeedsCursor = bLoginVisible || bLoadingVisible || bCharacterFlowVisible;
     PlayerController->SetShowMouseCursor(bNeedsCursor);
 
     if (bNeedsCursor)

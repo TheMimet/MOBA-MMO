@@ -5,6 +5,8 @@
 #include "Engine/World.h"
 #include "GameFramework/PlayerController.h"
 #include "Blueprint/UserWidget.h"
+#include "Misc/CommandLine.h"
+#include "Misc/Parse.h"
 #include "MOBAMMOCharacterFlowWidget.h"
 #include "MOBAMMODebugLoginWidget.h"
 #include "UObject/SoftObjectPath.h"
@@ -51,7 +53,7 @@ bool UMOBAMMODebugOverlaySubsystem::Tick(float DeltaTime)
 #if UE_BUILD_SHIPPING
     return false;
 #else
-    if (DebugWidget && DebugWidget->IsInViewport())
+    if (DebugWidget && DebugWidget->IsInViewport() && ShouldShowDebugPanel())
     {
         return true;
     }
@@ -82,15 +84,22 @@ bool UMOBAMMODebugOverlaySubsystem::Tick(float DeltaTime)
 
     EnsureCharacterFlowWidget(PlayerController);
 
-    const TSubclassOf<UMOBAMMODebugLoginWidget> DebugWidgetClass = ResolveDebugWidgetClass();
-    if (!DebugWidget)
+    if (ShouldShowDebugPanel())
     {
-        DebugWidget = CreateWidget<UMOBAMMODebugLoginWidget>(PlayerController, DebugWidgetClass);
-        if (DebugWidget)
+        const TSubclassOf<UMOBAMMODebugLoginWidget> DebugWidgetClass = ResolveDebugWidgetClass();
+        if (!DebugWidget)
         {
-            DebugWidget->AddToViewport(10000);
-            DebugWidget->SetPositionInViewport(FVector2D(24.0f, 24.0f), false);
+            DebugWidget = CreateWidget<UMOBAMMODebugLoginWidget>(PlayerController, DebugWidgetClass);
+            if (DebugWidget)
+            {
+                DebugWidget->AddToViewport(10000);
+                DebugWidget->SetPositionInViewport(FVector2D(24.0f, 24.0f), false);
+            }
         }
+    }
+    else if (DebugWidget)
+    {
+        DebugWidget->SetVisibility(ESlateVisibility::Collapsed);
     }
 
     return true;
@@ -110,6 +119,11 @@ bool UMOBAMMODebugOverlaySubsystem::CanCreateDebugWidget(UWorld* World) const
     }
 
     return World->GetNetMode() != NM_DedicatedServer;
+}
+
+bool UMOBAMMODebugOverlaySubsystem::ShouldShowDebugPanel() const
+{
+    return FParse::Param(FCommandLine::Get(), TEXT("ShowDebugPanel"));
 }
 
 TSubclassOf<UMOBAMMODebugLoginWidget> UMOBAMMODebugOverlaySubsystem::ResolveDebugWidgetClass() const
