@@ -9,6 +9,7 @@
 #include "MOBAMMOGameHUDWidget.h"
 #include "MOBAMMOLoginScreenWidget.h"
 #include "MOBAMMOLoadingScreenWidget.h"
+#include "MOBAMMOCharacterSelectWidget.h"
 #include "UObject/SoftObjectPath.h"
 
 void UMOBAMMOGameUISubsystem::Initialize(FSubsystemCollectionBase& Collection)
@@ -37,6 +38,12 @@ void UMOBAMMOGameUISubsystem::Deinitialize()
     {
         LoginWidget->RemoveFromParent();
         LoginWidget = nullptr;
+    }
+
+    if (CharacterSelectWidget)
+    {
+        CharacterSelectWidget->RemoveFromParent();
+        CharacterSelectWidget = nullptr;
     }
 
     if (LoadingWidget)
@@ -107,12 +114,45 @@ bool UMOBAMMOGameUISubsystem::CanCreateWidgets(UWorld* World) const
 
 void UMOBAMMOGameUISubsystem::EnsureWidgets(APlayerController* PlayerController)
 {
+    auto ResetIfStale = [PlayerController](auto& Widget)
+    {
+        if (!Widget)
+        {
+            return;
+        }
+
+        if (Widget->GetOwningPlayer() != PlayerController || !Widget->IsInViewport())
+        {
+            Widget->RemoveFromParent();
+            Widget = nullptr;
+        }
+    };
+
+    ResetIfStale(LoginWidget);
+    ResetIfStale(CharacterSelectWidget);
+    ResetIfStale(LoadingWidget);
+
+    if (HUDWidget && (HUDWidget->GetOwningPlayer() != PlayerController || !HUDWidget->IsInViewport() || !HUDWidget->IsAbilityBarReady()))
+    {
+        HUDWidget->RemoveFromParent();
+        HUDWidget = nullptr;
+    }
+
     if (!LoginWidget)
     {
         LoginWidget = CreateWidget<UMOBAMMOLoginScreenWidget>(PlayerController, ResolveLoginWidgetClass());
         if (LoginWidget)
         {
             LoginWidget->AddToViewport(7000);
+        }
+    }
+
+    if (!CharacterSelectWidget)
+    {
+        CharacterSelectWidget = CreateWidget<UMOBAMMOCharacterSelectWidget>(PlayerController, ResolveCharacterSelectWidgetClass());
+        if (CharacterSelectWidget)
+        {
+            CharacterSelectWidget->AddToViewport(7500);
         }
     }
 
@@ -131,7 +171,6 @@ void UMOBAMMOGameUISubsystem::EnsureWidgets(APlayerController* PlayerController)
         if (HUDWidget)
         {
             HUDWidget->AddToViewport(2000);
-            HUDWidget->SetPositionInViewport(FVector2D(24.0f, 24.0f), false);
         }
     }
 }
@@ -168,13 +207,17 @@ void UMOBAMMOGameUISubsystem::UpdateWidgetVisibility(APlayerController* PlayerCo
 {
     const bool bLoadingVisible = LoadingWidget && LoadingWidget->ShouldBeVisible();
     const bool bLoginVisible = LoginWidget && LoginWidget->ShouldBeVisible();
+    const bool bCharacterSelectVisible = CharacterSelectWidget && CharacterSelectWidget->ShouldBeVisible();
     const bool bHUDVisible = HUDWidget && HUDWidget->ShouldBeVisible();
-    const UMOBAMMOBackendSubsystem* BackendSubsystem = GetGameInstance() ? GetGameInstance()->GetSubsystem<UMOBAMMOBackendSubsystem>() : nullptr;
-    const bool bCharacterFlowVisible = BackendSubsystem && BackendSubsystem->IsWaitingForCharacterSelection();
 
     if (LoginWidget)
     {
         LoginWidget->RefreshFromBackend();
+    }
+
+    if (CharacterSelectWidget)
+    {
+        CharacterSelectWidget->RefreshFromBackend();
     }
 
     if (LoadingWidget)
@@ -187,7 +230,7 @@ void UMOBAMMOGameUISubsystem::UpdateWidgetVisibility(APlayerController* PlayerCo
         HUDWidget->RefreshFromBackend();
     }
 
-    const bool bNeedsCursor = bLoginVisible || bLoadingVisible || bCharacterFlowVisible;
+    const bool bNeedsCursor = bLoginVisible || bLoadingVisible || bCharacterSelectVisible;
     PlayerController->SetShowMouseCursor(bNeedsCursor);
 
     if (bNeedsCursor)
@@ -205,33 +248,24 @@ void UMOBAMMOGameUISubsystem::UpdateWidgetVisibility(APlayerController* PlayerCo
 
 TSubclassOf<UMOBAMMOLoginScreenWidget> UMOBAMMOGameUISubsystem::ResolveLoginWidgetClass() const
 {
-    const FSoftClassPath BlueprintWidgetClassPath(TEXT("/Game/WBP_LoginScreen.WBP_LoginScreen_C"));
-    if (UClass* LoadedClass = BlueprintWidgetClassPath.TryLoadClass<UMOBAMMOLoginScreenWidget>())
-    {
-        return LoadedClass;
-    }
-
+    // Force C++ Native UI execution because WBP_LoginScreen has old WebBrowser bindings
     return UMOBAMMOLoginScreenWidget::StaticClass();
 }
 
 TSubclassOf<UMOBAMMOLoadingScreenWidget> UMOBAMMOGameUISubsystem::ResolveLoadingWidgetClass() const
 {
-    const FSoftClassPath BlueprintWidgetClassPath(TEXT("/Game/WBP_LoadingScreen.WBP_LoadingScreen_C"));
-    if (UClass* LoadedClass = BlueprintWidgetClassPath.TryLoadClass<UMOBAMMOLoadingScreenWidget>())
-    {
-        return LoadedClass;
-    }
-
+    // Force C++ Native UI execution
     return UMOBAMMOLoadingScreenWidget::StaticClass();
 }
 
 TSubclassOf<UMOBAMMOGameHUDWidget> UMOBAMMOGameUISubsystem::ResolveHUDWidgetClass() const
 {
-    const FSoftClassPath BlueprintWidgetClassPath(TEXT("/Game/WBP_GameHUD.WBP_GameHUD_C"));
-    if (UClass* LoadedClass = BlueprintWidgetClassPath.TryLoadClass<UMOBAMMOGameHUDWidget>())
-    {
-        return LoadedClass;
-    }
-
+    // Force C++ Native UI execution because dynamically overriding BP WidgetTree breaks Slate rendering
     return UMOBAMMOGameHUDWidget::StaticClass();
+}
+
+TSubclassOf<UMOBAMMOCharacterSelectWidget> UMOBAMMOGameUISubsystem::ResolveCharacterSelectWidgetClass() const
+{
+    // Force C++ Native UI execution because WBP_CharacterSelect has old WebBrowser bindings
+    return UMOBAMMOCharacterSelectWidget::StaticClass();
 }

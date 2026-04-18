@@ -6,7 +6,7 @@
 #include "MOBAMMODebugOverlaySubsystem.generated.h"
 
 class UMOBAMMODebugLoginWidget;
-class UMOBAMMOCharacterFlowWidget;
+class UMOBAMMOCharacterSelectWidget;
 
 UCLASS()
 class MOBAMMO_API UMOBAMMODebugOverlaySubsystem : public UGameInstanceSubsystem
@@ -22,7 +22,7 @@ private:
     bool CanCreateDebugWidget(UWorld* World) const;
     bool EnsureCharacterFlowWidget(APlayerController* PlayerController);
     bool ShouldShowDebugPanel() const;
-    TSubclassOf<UMOBAMMOCharacterFlowWidget> ResolveCharacterFlowWidgetClass() const;
+    TSubclassOf<UMOBAMMOCharacterSelectWidget> ResolveCharacterFlowWidgetClass() const;
     TSubclassOf<UMOBAMMODebugLoginWidget> ResolveDebugWidgetClass() const;
 
     FTSTicker::FDelegateHandle TickHandle;
@@ -31,7 +31,7 @@ private:
     TObjectPtr<UMOBAMMODebugLoginWidget> DebugWidget;
 
     UPROPERTY(Transient)
-    TObjectPtr<UMOBAMMOCharacterFlowWidget> CharacterFlowWidget;
+    TObjectPtr<class UMOBAMMOCharacterSelectWidget> CharacterFlowWidget;
 
     bool bCharacterFlowInputApplied = false;
 };

@@ -2,11 +2,15 @@
 
 #include "Blueprint/WidgetTree.h"
 #include "Components/Border.h"
+#include "Components/CanvasPanel.h"
+#include "Components/CanvasPanelSlot.h"
 #include "Components/HorizontalBox.h"
 #include "Components/HorizontalBoxSlot.h"
+#include "Components/Image.h"
 #include "Components/Overlay.h"
 #include "Components/OverlaySlot.h"
 #include "Components/ProgressBar.h"
+#include "Components/SizeBox.h"
 #include "Components/Spacer.h"
 #include "Components/TextBlock.h"
 #include "Components/VerticalBox.h"
@@ -16,7 +20,52 @@
 #include "MOBAMMOGameState.h"
 #include "MOBAMMOPlayerController.h"
 #include "MOBAMMOPlayerState.h"
+#include "MOBAMMOTrainingMinionActor.h"
+#include "EngineUtils.h"
 
+// ─────────────────────────────────────────────────────────────
+// Color palette
+// ─────────────────────────────────────────────────────────────
+namespace HUDColors
+{
+    // Glass panels
+    static const FLinearColor PanelBg        (0.020f, 0.024f, 0.040f, 0.78f);
+    static const FLinearColor PanelBorder    (0.180f, 0.220f, 0.320f, 0.45f);
+    static const FLinearColor PanelHighlight (0.100f, 0.140f, 0.240f, 0.85f);
+
+    // Health / Mana
+    static const FLinearColor HealthFill     (0.780f, 0.180f, 0.200f, 1.0f);
+    static const FLinearColor HealthBg       (0.140f, 0.060f, 0.060f, 1.0f);
+    static const FLinearColor ManaFill       (0.160f, 0.440f, 0.820f, 1.0f);
+    static const FLinearColor ManaBg         (0.040f, 0.060f, 0.140f, 1.0f);
+
+    // Abilities
+    static const FLinearColor AbilityReady   (0.220f, 0.580f, 0.920f, 1.0f);
+    static const FLinearColor AbilityCooldown(0.640f, 0.520f, 0.180f, 1.0f);
+    static const FLinearColor AbilityDead    (0.240f, 0.120f, 0.120f, 1.0f);
+    static const FLinearColor AbilityDamage  (0.880f, 0.240f, 0.280f, 1.0f);
+    static const FLinearColor AbilityHeal    (0.200f, 0.760f, 0.440f, 1.0f);
+    static const FLinearColor AbilityCharged (0.340f, 0.780f, 1.000f, 1.0f);
+    static const FLinearColor AbilityLocked  (0.180f, 0.180f, 0.220f, 1.0f);
+    static const FLinearColor AbilityNoMana  (0.520f, 0.180f, 0.180f, 1.0f);
+    static const FLinearColor AbilityNoTarget(0.420f, 0.200f, 0.160f, 1.0f);
+    static const FLinearColor AbilityRespawn (0.220f, 0.720f, 0.460f, 1.0f);
+    static const FLinearColor AbilityBarBg   (0.060f, 0.060f, 0.080f, 1.0f);
+
+    // Text
+    static const FLinearColor TextPrimary    (0.920f, 0.940f, 0.960f, 1.0f);
+    static const FLinearColor TextSecondary  (0.600f, 0.660f, 0.740f, 1.0f);
+    static const FLinearColor TextGold       (0.960f, 0.820f, 0.440f, 1.0f);
+    static const FLinearColor TextDanger     (0.960f, 0.320f, 0.360f, 1.0f);
+    static const FLinearColor TextSuccess    (0.340f, 0.920f, 0.560f, 1.0f);
+    static const FLinearColor TextCyan       (0.500f, 0.840f, 1.000f, 1.0f);
+    static const FLinearColor TextAlive      (0.340f, 0.920f, 0.560f, 1.0f);
+    static const FLinearColor TextDead       (0.960f, 0.320f, 0.360f, 1.0f);
+}
+
+// ─────────────────────────────────────────────────────────────
+// Lifecycle
+// ─────────────────────────────────────────────────────────────
 void UMOBAMMOGameHUDWidget::NativeOnInitialized()
 {
     Super::NativeOnInitialized();
@@ -43,6 +92,7 @@ void UMOBAMMOGameHUDWidget::NativeTick(const FGeometry& MyGeometry, float InDelt
 
     if (IsVisible())
     {
+        EnsureAbilityBarVisible();
         UpdateTexts();
     }
 }
@@ -51,6 +101,7 @@ void UMOBAMMOGameHUDWidget::RefreshFromBackend()
 {
     UpdateTexts();
     SetVisibility(ShouldBeVisible() ? ESlateVisibility::Visible : ESlateVisibility::Collapsed);
+    EnsureAbilityBarVisible();
 }
 
 bool UMOBAMMOGameHUDWidget::ShouldBeVisible() const
@@ -71,6 +122,14 @@ bool UMOBAMMOGameHUDWidget::ShouldBeVisible() const
     return BackendSubsystem->GetSessionStatus() != TEXT("Starting") && BackendSubsystem->GetSessionStatus() != TEXT("Traveling");
 }
 
+bool UMOBAMMOGameHUDWidget::IsAbilityBarReady() const
+{
+    return AbilityBarBorder != nullptr
+        && AbilitySlotBorders.Num() > 0
+        && AbilityStateTexts.Num() == AbilitySlotBorders.Num()
+        && AbilityCooldownBars.Num() == AbilitySlotBorders.Num();
+}
+
 UMOBAMMOBackendSubsystem* UMOBAMMOGameHUDWidget::GetBackendSubsystem() const
 {
     if (UGameInstance* GameInstance = GetGameInstance())
@@ -81,122 +140,204 @@ UMOBAMMOBackendSubsystem* UMOBAMMOGameHUDWidget::GetBackendSubsystem() const
     return nullptr;
 }
 
+// ─────────────────────────────────────────────────────────────
+// Helper: glass panel
+// ─────────────────────────────────────────────────────────────
+UBorder* UMOBAMMOGameHUDWidget::MakeGlassPanel(const FLinearColor& Tint, float Alpha, float /*CornerRadius*/) const
+{
+    UBorder* Panel = WidgetTree->ConstructWidget<UBorder>(UBorder::StaticClass());
+    FLinearColor BgColor = Tint;
+    BgColor.A = Alpha;
+    Panel->SetBrushColor(BgColor);
+    return Panel;
+}
+
+UProgressBar* UMOBAMMOGameHUDWidget::MakeStyledBar(const FLinearColor& FillColor, const FLinearColor& BgColor, float Height) const
+{
+    UProgressBar* Bar = WidgetTree->ConstructWidget<UProgressBar>(UProgressBar::StaticClass());
+    Bar->SetFillColorAndOpacity(FillColor);
+    Bar->SetPercent(1.0f);
+
+    // Style the bar via WidgetStyle
+    FProgressBarStyle BarStyle = Bar->GetWidgetStyle();
+    FLinearColor BarBgColor = BgColor;
+    BarBgColor.A = FMath::Max(BarBgColor.A, 0.6f);
+    BarStyle.BackgroundImage.TintColor = FSlateColor(BarBgColor);
+    Bar->SetWidgetStyle(BarStyle);
+
+    return Bar;
+}
+
+// ─────────────────────────────────────────────────────────────
+// Layout: Root
+// ─────────────────────────────────────────────────────────────
 void UMOBAMMOGameHUDWidget::BuildLayout()
 {
-    if (!WidgetTree || WidgetTree->RootWidget)
+    if (!WidgetTree)
     {
         return;
     }
 
-    RootOverlay = WidgetTree->ConstructWidget<UOverlay>(UOverlay::StaticClass());
-    WidgetTree->RootWidget = RootOverlay;
-
-    RootBorder = WidgetTree->ConstructWidget<UBorder>(UBorder::StaticClass());
-    RootBorder->SetBrushColor(FLinearColor(0.02f, 0.05f, 0.08f, 0.82f));
-    RootBorder->SetPadding(FMargin(14.0f, 12.0f));
-    RootOverlay->AddChildToOverlay(RootBorder);
-
-    UVerticalBox* Layout = WidgetTree->ConstructWidget<UVerticalBox>(UVerticalBox::StaticClass());
-    RootBorder->SetContent(Layout);
-
-    FloatingTargetFeedbackText = WidgetTree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass());
-    FloatingTargetFeedbackText->SetVisibility(ESlateVisibility::HitTestInvisible);
-    FloatingTargetFeedbackText->SetText(FText::GetEmpty());
-    FloatingTargetFeedbackText->SetColorAndOpacity(FSlateColor(FLinearColor(0.92f, 0.32f, 0.34f, 0.0f)));
-    FSlateFontInfo FloatingFont = FloatingTargetFeedbackText->GetFont();
-    FloatingFont.Size = 18;
-    FloatingFont.TypefaceFontName = TEXT("Bold");
-    FloatingTargetFeedbackText->SetFont(FloatingFont);
-    if (UOverlaySlot* FloatingSlot = RootOverlay->AddChildToOverlay(FloatingTargetFeedbackText))
+    // Force clear any existing blueprint root widget so we can build the dynamic UI
+    if (WidgetTree->RootWidget)
     {
-        FloatingSlot->SetHorizontalAlignment(HAlign_Left);
-        FloatingSlot->SetVerticalAlignment(VAlign_Top);
-        FloatingSlot->SetPadding(FMargin(24.0f, 24.0f, 0.0f, 0.0f));
+        WidgetTree->RootWidget->RemoveFromParent();
+        WidgetTree->RootWidget = nullptr;
     }
 
-    StatusText = WidgetTree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass());
-    StatusText->SetColorAndOpacity(FSlateColor(FLinearColor::White));
-    FSlateFontInfo StatusFont = StatusText->GetFont();
-    StatusFont.Size = 15;
-    StatusText->SetFont(StatusFont);
-    Layout->AddChildToVerticalBox(StatusText);
+    RootCanvas = WidgetTree->ConstructWidget<UCanvasPanel>(UCanvasPanel::StaticClass());
+    WidgetTree->RootWidget = RootCanvas;
 
-    DetailText = WidgetTree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass());
-    DetailText->SetColorAndOpacity(FSlateColor(FLinearColor(0.66f, 0.78f, 0.84f, 1.0f)));
-    FSlateFontInfo DetailFont = DetailText->GetFont();
-    DetailFont.Size = 12;
-    DetailText->SetFont(DetailFont);
-    if (UVerticalBoxSlot* DetailSlot = Layout->AddChildToVerticalBox(DetailText))
+    BuildPlayerFrame(RootCanvas);
+    BuildAbilityBar(RootCanvas);
+    BuildTargetFrame(RootCanvas);
+    BuildCombatLog(RootCanvas);
+    BuildScoreBar(RootCanvas);
+    BuildCenterNotifications(RootCanvas);
+}
+
+// ─────────────────────────────────────────────────────────────
+// Layout: Player Frame (bottom-left)
+// ─────────────────────────────────────────────────────────────
+void UMOBAMMOGameHUDWidget::BuildPlayerFrame(UCanvasPanel* Canvas)
+{
+    UBorder* FrameBg = MakeGlassPanel(HUDColors::PanelBg, 0.82f);
+    FrameBg->SetPadding(FMargin(16.0f, 10.0f, 16.0f, 12.0f));
+
+    UCanvasPanelSlot* FrameSlot = Canvas->AddChildToCanvas(FrameBg);
+    if (FrameSlot)
     {
-        DetailSlot->SetPadding(FMargin(0.0f, 4.0f, 0.0f, 8.0f));
+        FrameSlot->SetAnchors(FAnchors(0.0f, 1.0f, 0.0f, 1.0f));      // bottom-left
+        FrameSlot->SetAlignment(FVector2D(0.0f, 1.0f));
+        FrameSlot->SetPosition(FVector2D(20.0f, -20.0f));
+        FrameSlot->SetSize(FVector2D(320.0f, 140.0f));
+        FrameSlot->SetAutoSize(false);
     }
 
-    HealthBar = WidgetTree->ConstructWidget<UProgressBar>(UProgressBar::StaticClass());
-    HealthBar->SetFillColorAndOpacity(FLinearColor(0.83f, 0.30f, 0.34f, 1.0f));
-    if (UVerticalBoxSlot* HealthSlot = Layout->AddChildToVerticalBox(HealthBar))
+    // Outer border glow
+    UBorder* BorderGlow = WidgetTree->ConstructWidget<UBorder>(UBorder::StaticClass());
+    BorderGlow->SetBrushColor(HUDColors::PanelBorder);
+    BorderGlow->SetPadding(FMargin(1.0f));
+    BorderGlow->SetContent(FrameBg);
+
+    // Actually replace child with the glow wrapper
+    if (FrameSlot)
     {
-        HealthSlot->SetPadding(FMargin(0.0f, 0.0f, 0.0f, 6.0f));
+        FrameSlot->SetSize(FVector2D(322.0f, 142.0f));
+    }
+    Canvas->RemoveChild(FrameBg);
+    UCanvasPanelSlot* GlowSlot = Canvas->AddChildToCanvas(BorderGlow);
+    if (GlowSlot)
+    {
+        GlowSlot->SetAnchors(FAnchors(0.0f, 1.0f, 0.0f, 1.0f));
+        GlowSlot->SetAlignment(FVector2D(0.0f, 1.0f));
+        GlowSlot->SetPosition(FVector2D(20.0f, -20.0f));
+        GlowSlot->SetSize(FVector2D(322.0f, 142.0f));
+        GlowSlot->SetAutoSize(false);
     }
 
-    ManaBar = WidgetTree->ConstructWidget<UProgressBar>(UProgressBar::StaticClass());
-    ManaBar->SetFillColorAndOpacity(FLinearColor(0.25f, 0.60f, 0.88f, 1.0f));
-    Layout->AddChildToVerticalBox(ManaBar);
+    UVerticalBox* Content = WidgetTree->ConstructWidget<UVerticalBox>(UVerticalBox::StaticClass());
+    FrameBg->SetContent(Content);
 
-    ControlsText = WidgetTree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass());
-    ControlsText->SetColorAndOpacity(FSlateColor(FLinearColor(0.86f, 0.82f, 0.60f, 0.92f)));
-    FSlateFontInfo ControlsFont = ControlsText->GetFont();
-    ControlsFont.Size = 11;
-    ControlsText->SetFont(ControlsFont);
-    ControlsText->SetText(FText::FromString(TEXT("1 Damage | 2 Heal | 3 Spend Mana | 4 Restore Mana | 5 Respawn | 6 Cycle Target | 7 Clear Target")));
-    if (UVerticalBoxSlot* ControlsSlot = Layout->AddChildToVerticalBox(ControlsText))
+    // Row 1: Name + life state
+    UHorizontalBox* NameRow = WidgetTree->ConstructWidget<UHorizontalBox>(UHorizontalBox::StaticClass());
+    Content->AddChildToVerticalBox(NameRow);
+
+    PlayerNameText = WidgetTree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass());
+    PlayerNameText->SetColorAndOpacity(FSlateColor(HUDColors::TextPrimary));
+    FSlateFontInfo NameFont = PlayerNameText->GetFont();
+    NameFont.Size = 16;
+    NameFont.TypefaceFontName = TEXT("Bold");
+    PlayerNameText->SetFont(NameFont);
+    if (UHorizontalBoxSlot* NameSlot = NameRow->AddChildToHorizontalBox(PlayerNameText))
     {
-        ControlsSlot->SetPadding(FMargin(0.0f, 8.0f, 0.0f, 6.0f));
+        NameSlot->SetSize(ESlateSizeRule::Fill);
+        NameSlot->SetVerticalAlignment(VAlign_Center);
     }
 
-    ActionHintText = WidgetTree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass());
-    ActionHintText->SetColorAndOpacity(FSlateColor(FLinearColor(0.98f, 0.84f, 0.56f, 0.96f)));
-    FSlateFontInfo HintFont = ActionHintText->GetFont();
-    HintFont.Size = 12;
-    HintFont.TypefaceFontName = TEXT("Bold");
-    ActionHintText->SetFont(HintFont);
-    ActionHintText->SetAutoWrapText(true);
-    if (UVerticalBoxSlot* HintSlot = Layout->AddChildToVerticalBox(ActionHintText))
+    PlayerLifeStateText = WidgetTree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass());
+    PlayerLifeStateText->SetColorAndOpacity(FSlateColor(HUDColors::TextAlive));
+    FSlateFontInfo LifeFont = PlayerLifeStateText->GetFont();
+    LifeFont.Size = 11;
+    LifeFont.TypefaceFontName = TEXT("Bold");
+    PlayerLifeStateText->SetFont(LifeFont);
+    if (UHorizontalBoxSlot* LifeSlot = NameRow->AddChildToHorizontalBox(PlayerLifeStateText))
     {
-        HintSlot->SetPadding(FMargin(0.0f, 0.0f, 0.0f, 8.0f));
+        LifeSlot->SetVerticalAlignment(VAlign_Center);
+        LifeSlot->SetPadding(FMargin(6.0f, 0.0f, 0.0f, 0.0f));
     }
 
-    ArcChargeText = WidgetTree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass());
-    ArcChargeText->SetColorAndOpacity(FSlateColor(FLinearColor(0.60f, 0.86f, 1.0f, 0.96f)));
-    FSlateFontInfo ArcChargeFont = ArcChargeText->GetFont();
-    ArcChargeFont.Size = 11;
-    ArcChargeFont.TypefaceFontName = TEXT("Bold");
-    ArcChargeText->SetFont(ArcChargeFont);
-    ArcChargeText->SetAutoWrapText(true);
-    if (UVerticalBoxSlot* ArcChargeSlot = Layout->AddChildToVerticalBox(ArcChargeText))
+    // Row 2: Class + Level
+    PlayerClassLevelText = WidgetTree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass());
+    PlayerClassLevelText->SetColorAndOpacity(FSlateColor(HUDColors::TextSecondary));
+    FSlateFontInfo ClassFont = PlayerClassLevelText->GetFont();
+    ClassFont.Size = 11;
+    PlayerClassLevelText->SetFont(ClassFont);
+    if (UVerticalBoxSlot* ClassSlot = Content->AddChildToVerticalBox(PlayerClassLevelText))
     {
-        ArcChargeSlot->SetPadding(FMargin(0.0f, 0.0f, 0.0f, 8.0f));
+        ClassSlot->SetPadding(FMargin(0.0f, 2.0f, 0.0f, 8.0f));
     }
 
-    CombatEventText = WidgetTree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass());
-    CombatEventText->SetColorAndOpacity(FSlateColor(FLinearColor(1.0f, 0.86f, 0.54f, 0.0f)));
-    FSlateFontInfo EventFont = CombatEventText->GetFont();
-    EventFont.Size = 16;
-    EventFont.TypefaceFontName = TEXT("Bold");
-    CombatEventText->SetFont(EventFont);
-    CombatEventText->SetAutoWrapText(true);
-    CombatEventText->SetJustification(ETextJustify::Center);
-    if (UVerticalBoxSlot* CombatEventSlot = Layout->AddChildToVerticalBox(CombatEventText))
+    // Health bar with value overlay
     {
-        CombatEventSlot->SetPadding(FMargin(0.0f, 0.0f, 0.0f, 8.0f));
+        UOverlay* HealthOverlay = WidgetTree->ConstructWidget<UOverlay>(UOverlay::StaticClass());
+        USizeBox* HealthSizeBox = WidgetTree->ConstructWidget<USizeBox>(USizeBox::StaticClass());
+        HealthSizeBox->SetHeightOverride(22.0f);
+        HealthSizeBox->AddChild(HealthOverlay);
+
+        HealthBar = MakeStyledBar(HUDColors::HealthFill, HUDColors::HealthBg, 22.0f);
+        HealthOverlay->AddChildToOverlay(HealthBar);
+
+        HealthValueText = WidgetTree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass());
+        HealthValueText->SetColorAndOpacity(FSlateColor(FLinearColor::White));
+        FSlateFontInfo HealthFont = HealthValueText->GetFont();
+        HealthFont.Size = 11;
+        HealthFont.TypefaceFontName = TEXT("Bold");
+        HealthValueText->SetFont(HealthFont);
+        if (UOverlaySlot* ValueSlot = HealthOverlay->AddChildToOverlay(HealthValueText))
+        {
+            ValueSlot->SetHorizontalAlignment(HAlign_Center);
+            ValueSlot->SetVerticalAlignment(VAlign_Center);
+        }
+
+        if (UVerticalBoxSlot* HealthSlot = Content->AddChildToVerticalBox(HealthSizeBox))
+        {
+            HealthSlot->SetPadding(FMargin(0.0f, 0.0f, 0.0f, 4.0f));
+        }
     }
 
-    UHorizontalBox* AbilityBarRow = WidgetTree->ConstructWidget<UHorizontalBox>(UHorizontalBox::StaticClass());
-    if (UVerticalBoxSlot* AbilityBarRowSlot = Layout->AddChildToVerticalBox(AbilityBarRow))
+    // Mana bar with value overlay
     {
-        AbilityBarRowSlot->SetPadding(FMargin(0.0f, 0.0f, 0.0f, 8.0f));
-    }
+        UOverlay* ManaOverlay = WidgetTree->ConstructWidget<UOverlay>(UOverlay::StaticClass());
+        USizeBox* ManaSizeBox = WidgetTree->ConstructWidget<USizeBox>(USizeBox::StaticClass());
+        ManaSizeBox->SetHeightOverride(18.0f);
+        ManaSizeBox->AddChild(ManaOverlay);
 
-    const TArray<FMOBAMMOAbilityDefinition> AbilityDefinitions = {
+        ManaBar = MakeStyledBar(HUDColors::ManaFill, HUDColors::ManaBg, 18.0f);
+        ManaOverlay->AddChildToOverlay(ManaBar);
+
+        ManaValueText = WidgetTree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass());
+        ManaValueText->SetColorAndOpacity(FSlateColor(FLinearColor::White));
+        FSlateFontInfo ManaFont = ManaValueText->GetFont();
+        ManaFont.Size = 10;
+        ManaFont.TypefaceFontName = TEXT("Bold");
+        ManaValueText->SetFont(ManaFont);
+        if (UOverlaySlot* ValueSlot = ManaOverlay->AddChildToOverlay(ManaValueText))
+        {
+            ValueSlot->SetHorizontalAlignment(HAlign_Center);
+            ValueSlot->SetVerticalAlignment(VAlign_Center);
+        }
+
+        Content->AddChildToVerticalBox(ManaSizeBox);
+    }
+}
+
+// ─────────────────────────────────────────────────────────────
+// Layout: Ability Bar (bottom-center)
+// ─────────────────────────────────────────────────────────────
+void UMOBAMMOGameHUDWidget::BuildAbilityBar(UCanvasPanel* Canvas)
+{
+    const TArray<FMOBAMMOAbilityDefinition> Abilities = {
         MOBAMMOAbilitySet::ArcBurst(),
         MOBAMMOAbilitySet::Renew(),
         MOBAMMOAbilitySet::DrainPulse(),
@@ -204,122 +345,425 @@ void UMOBAMMOGameHUDWidget::BuildLayout()
         MOBAMMOAbilitySet::Reforge()
     };
 
+    AbilityBarBorder = MakeGlassPanel(HUDColors::PanelBg, 0.88f);
+    AbilityBarBorder->SetPadding(FMargin(10.0f, 8.0f));
+    AbilityBarBorder->SetVisibility(ESlateVisibility::HitTestInvisible);
+
+    UCanvasPanelSlot* BarSlot = Canvas->AddChildToCanvas(AbilityBarBorder);
+    if (BarSlot)
+    {
+        BarSlot->SetAnchors(FAnchors(0.5f, 1.0f, 0.5f, 1.0f));         // bottom-center
+        BarSlot->SetAlignment(FVector2D(0.5f, 1.0f));
+        BarSlot->SetPosition(FVector2D(0.0f, -34.0f));
+        BarSlot->SetSize(FVector2D(560.0f, 92.0f));
+        BarSlot->SetAutoSize(false);
+    }
+
+    UHorizontalBox* AbilityRow = WidgetTree->ConstructWidget<UHorizontalBox>(UHorizontalBox::StaticClass());
+    AbilityBarBorder->SetContent(AbilityRow);
+
+    AbilitySlotBorders.Reset();
+    AbilityKeyTexts.Reset();
+    AbilityNameTexts.Reset();
+    AbilityStateTexts.Reset();
     AbilityCooldownBars.Reset();
-    AbilityCooldownTexts.Reset();
-    for (const FMOBAMMOAbilityDefinition& AbilityDefinition : AbilityDefinitions)
+
+    for (int32 Index = 0; Index < Abilities.Num(); ++Index)
     {
-        UVerticalBox* AbilitySlot = WidgetTree->ConstructWidget<UVerticalBox>(UVerticalBox::StaticClass());
-        if (UHorizontalBoxSlot* AbilitySlotSlot = AbilityBarRow->AddChildToHorizontalBox(AbilitySlot))
+        const FMOBAMMOAbilityDefinition& Def = Abilities[Index];
+
+        // Each ability is a bordered card
+        UBorder* SlotBorder = WidgetTree->ConstructWidget<UBorder>(UBorder::StaticClass());
+        SlotBorder->SetBrushColor(HUDColors::PanelHighlight);
+        SlotBorder->SetPadding(FMargin(1.0f));
+
+        UBorder* SlotBg = MakeGlassPanel(FLinearColor(0.030f, 0.035f, 0.060f), 0.92f);
+        SlotBg->SetPadding(FMargin(8.0f, 6.0f));
+        SlotBorder->SetContent(SlotBg);
+
+        USizeBox* SlotSize = WidgetTree->ConstructWidget<USizeBox>(USizeBox::StaticClass());
+        SlotSize->SetWidthOverride(100.0f);
+        SlotSize->AddChild(SlotBorder);
+
+        if (UHorizontalBoxSlot* HSlot = AbilityRow->AddChildToHorizontalBox(SlotSize))
         {
-            AbilitySlotSlot->SetPadding(FMargin(0.0f, 0.0f, 8.0f, 0.0f));
-            AbilitySlotSlot->SetSize(ESlateSizeRule::Fill);
+            HSlot->SetPadding(FMargin(Index > 0 ? 4.0f : 0.0f, 0.0f, 0.0f, 0.0f));
         }
 
-        UTextBlock* AbilityText = WidgetTree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass());
-        AbilityText->SetColorAndOpacity(FSlateColor(FLinearColor(0.93f, 0.93f, 0.96f, 0.98f)));
-        FSlateFontInfo AbilitySlotFont = AbilityText->GetFont();
-        AbilitySlotFont.Size = 10;
-        AbilityText->SetFont(AbilitySlotFont);
-        AbilityText->SetAutoWrapText(true);
-        AbilitySlot->AddChildToVerticalBox(AbilityText);
+        UVerticalBox* SlotContent = WidgetTree->ConstructWidget<UVerticalBox>(UVerticalBox::StaticClass());
+        SlotBg->SetContent(SlotContent);
 
-        UProgressBar* AbilityBar = WidgetTree->ConstructWidget<UProgressBar>(UProgressBar::StaticClass());
-        AbilityBar->SetPercent(1.0f);
-        AbilityBar->SetFillColorAndOpacity(FLinearColor(0.82f, 0.68f, 0.28f, 1.0f));
-        if (UVerticalBoxSlot* AbilityBarSlot = AbilitySlot->AddChildToVerticalBox(AbilityBar))
+        // Key label (centered)
+        UTextBlock* KeyText = WidgetTree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass());
+        KeyText->SetColorAndOpacity(FSlateColor(HUDColors::TextGold));
+        FSlateFontInfo KeyFont = KeyText->GetFont();
+        KeyFont.Size = 14;
+        KeyFont.TypefaceFontName = TEXT("Bold");
+        KeyText->SetFont(KeyFont);
+        KeyText->SetText(FText::FromString(Def.KeyLabel));
+        KeyText->SetJustification(ETextJustify::Center);
+        SlotContent->AddChildToVerticalBox(KeyText);
+
+        // Ability name
+        UTextBlock* NameText = WidgetTree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass());
+        NameText->SetColorAndOpacity(FSlateColor(HUDColors::TextPrimary));
+        FSlateFontInfo AbilityNameFont = NameText->GetFont();
+        AbilityNameFont.Size = 9;
+        NameText->SetFont(AbilityNameFont);
+        NameText->SetText(FText::FromString(Def.Name));
+        NameText->SetJustification(ETextJustify::Center);
+        if (UVerticalBoxSlot* NameSlot = SlotContent->AddChildToVerticalBox(NameText))
         {
-            AbilityBarSlot->SetPadding(FMargin(0.0f, 4.0f, 0.0f, 0.0f));
+            NameSlot->SetPadding(FMargin(0.0f, 2.0f, 0.0f, 4.0f));
         }
 
-        AbilityCooldownTexts.Add(AbilityText);
-        AbilityCooldownBars.Add(AbilityBar);
+        // Cooldown bar
+        UProgressBar* CdBar = MakeStyledBar(HUDColors::AbilityReady, HUDColors::AbilityBarBg, 6.0f);
+        USizeBox* CdSizeBox = WidgetTree->ConstructWidget<USizeBox>(USizeBox::StaticClass());
+        CdSizeBox->SetHeightOverride(6.0f);
+        CdSizeBox->AddChild(CdBar);
+        SlotContent->AddChildToVerticalBox(CdSizeBox);
+
+        // State label
+        UTextBlock* StateText = WidgetTree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass());
+        StateText->SetColorAndOpacity(FSlateColor(HUDColors::TextSuccess));
+        FSlateFontInfo StateFont = StateText->GetFont();
+        StateFont.Size = 8;
+        StateFont.TypefaceFontName = TEXT("Bold");
+        StateText->SetFont(StateFont);
+        StateText->SetText(FText::FromString(TEXT("READY")));
+        StateText->SetJustification(ETextJustify::Center);
+        if (UVerticalBoxSlot* StateSlot = SlotContent->AddChildToVerticalBox(StateText))
+        {
+            StateSlot->SetPadding(FMargin(0.0f, 3.0f, 0.0f, 0.0f));
+        }
+
+        AbilitySlotBorders.Add(SlotBorder);
+        AbilityKeyTexts.Add(KeyText);
+        AbilityNameTexts.Add(NameText);
+        AbilityStateTexts.Add(StateText);
+        AbilityCooldownBars.Add(CdBar);
     }
 
-    AbilityTrayText = WidgetTree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass());
-    AbilityTrayText->SetColorAndOpacity(FSlateColor(FLinearColor(0.93f, 0.93f, 0.96f, 0.96f)));
-    FSlateFontInfo AbilityFont = AbilityTrayText->GetFont();
-    AbilityFont.Size = 11;
-    AbilityTrayText->SetFont(AbilityFont);
-    AbilityTrayText->SetAutoWrapText(true);
-    if (UVerticalBoxSlot* AbilitySlot = Layout->AddChildToVerticalBox(AbilityTrayText))
+    EnsureAbilityBarVisible();
+}
+
+void UMOBAMMOGameHUDWidget::EnsureAbilityBarVisible()
+{
+    if (AbilityBarBorder)
     {
-        AbilitySlot->SetPadding(FMargin(0.0f, 0.0f, 0.0f, 6.0f));
+        AbilityBarBorder->SetVisibility(ESlateVisibility::HitTestInvisible);
     }
 
-    TargetPanelText = WidgetTree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass());
-    TargetPanelText->SetColorAndOpacity(FSlateColor(FLinearColor(0.90f, 0.78f, 0.55f, 1.0f)));
-    FSlateFontInfo TargetFont = TargetPanelText->GetFont();
-    TargetFont.Size = 11;
-    TargetFont.TypefaceFontName = TEXT("Bold");
-    TargetPanelText->SetFont(TargetFont);
-    TargetPanelText->SetAutoWrapText(true);
-    if (UVerticalBoxSlot* TargetPanelSlot = Layout->AddChildToVerticalBox(TargetPanelText))
+    for (TObjectPtr<UBorder>& SlotBorder : AbilitySlotBorders)
     {
-        TargetPanelSlot->SetPadding(FMargin(0.0f, 0.0f, 0.0f, 6.0f));
+        if (SlotBorder)
+        {
+            SlotBorder->SetVisibility(ESlateVisibility::HitTestInvisible);
+        }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────
+// Layout: Target Frame (top-right)
+// ─────────────────────────────────────────────────────────────
+void UMOBAMMOGameHUDWidget::BuildTargetFrame(UCanvasPanel* Canvas)
+{
+    TargetFrameBorder = WidgetTree->ConstructWidget<UBorder>(UBorder::StaticClass());
+    TargetFrameBorder->SetBrushColor(HUDColors::PanelBorder);
+    TargetFrameBorder->SetPadding(FMargin(1.0f));
+    TargetFrameBorder->SetVisibility(ESlateVisibility::Collapsed);
+
+    UBorder* FrameBg = MakeGlassPanel(HUDColors::PanelBg, 0.82f);
+    FrameBg->SetPadding(FMargin(14.0f, 10.0f, 14.0f, 12.0f));
+    TargetFrameBorder->SetContent(FrameBg);
+
+    UCanvasPanelSlot* TargetSlot = Canvas->AddChildToCanvas(TargetFrameBorder);
+    if (TargetSlot)
+    {
+        TargetSlot->SetAnchors(FAnchors(1.0f, 0.0f, 1.0f, 0.0f));     // top-right
+        TargetSlot->SetAlignment(FVector2D(1.0f, 0.0f));
+        TargetSlot->SetPosition(FVector2D(-20.0f, 20.0f));
+        TargetSlot->SetSize(FVector2D(300.0f, 120.0f));
+        TargetSlot->SetAutoSize(false);
     }
 
-    TargetStatusText = WidgetTree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass());
-    TargetStatusText->SetColorAndOpacity(FSlateColor(FLinearColor(0.77f, 0.86f, 0.90f, 0.94f)));
-    FSlateFontInfo TargetStatusFont = TargetStatusText->GetFont();
-    TargetStatusFont.Size = 10;
-    TargetStatusText->SetFont(TargetStatusFont);
-    TargetStatusText->SetAutoWrapText(true);
-    if (UVerticalBoxSlot* TargetStatusSlot = Layout->AddChildToVerticalBox(TargetStatusText))
+    UVerticalBox* Content = WidgetTree->ConstructWidget<UVerticalBox>(UVerticalBox::StaticClass());
+    FrameBg->SetContent(Content);
+
+    // Name row
+    UHorizontalBox* NameRow = WidgetTree->ConstructWidget<UHorizontalBox>(UHorizontalBox::StaticClass());
+    Content->AddChildToVerticalBox(NameRow);
+
+    TargetNameText = WidgetTree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass());
+    TargetNameText->SetColorAndOpacity(FSlateColor(HUDColors::TextDanger));
+    FSlateFontInfo TargetNameFont = TargetNameText->GetFont();
+    TargetNameFont.Size = 14;
+    TargetNameFont.TypefaceFontName = TEXT("Bold");
+    TargetNameText->SetFont(TargetNameFont);
+    if (UHorizontalBoxSlot* TNameSlot = NameRow->AddChildToHorizontalBox(TargetNameText))
     {
-        TargetStatusSlot->SetPadding(FMargin(0.0f, 0.0f, 0.0f, 4.0f));
+        TNameSlot->SetSize(ESlateSizeRule::Fill);
+        TNameSlot->SetVerticalAlignment(VAlign_Center);
     }
 
-    TargetHealthBar = WidgetTree->ConstructWidget<UProgressBar>(UProgressBar::StaticClass());
-    TargetHealthBar->SetFillColorAndOpacity(FLinearColor(0.88f, 0.34f, 0.36f, 1.0f));
-    if (UVerticalBoxSlot* TargetHealthSlot = Layout->AddChildToVerticalBox(TargetHealthBar))
+    TargetRangeText = WidgetTree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass());
+    TargetRangeText->SetColorAndOpacity(FSlateColor(HUDColors::TextSecondary));
+    FSlateFontInfo RangeFont = TargetRangeText->GetFont();
+    RangeFont.Size = 9;
+    RangeFont.TypefaceFontName = TEXT("Bold");
+    TargetRangeText->SetFont(RangeFont);
+    if (UHorizontalBoxSlot* RangeSlot = NameRow->AddChildToHorizontalBox(TargetRangeText))
     {
-        TargetHealthSlot->SetPadding(FMargin(0.0f, 0.0f, 0.0f, 4.0f));
+        RangeSlot->SetVerticalAlignment(VAlign_Center);
     }
 
-    TargetManaBar = WidgetTree->ConstructWidget<UProgressBar>(UProgressBar::StaticClass());
-    TargetManaBar->SetFillColorAndOpacity(FLinearColor(0.31f, 0.60f, 0.90f, 1.0f));
-    if (UVerticalBoxSlot* TargetManaSlot = Layout->AddChildToVerticalBox(TargetManaBar))
+    // Class text
+    TargetClassText = WidgetTree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass());
+    TargetClassText->SetColorAndOpacity(FSlateColor(HUDColors::TextSecondary));
+    FSlateFontInfo TClassFont = TargetClassText->GetFont();
+    TClassFont.Size = 10;
+    TargetClassText->SetFont(TClassFont);
+    if (UVerticalBoxSlot* CSlot = Content->AddChildToVerticalBox(TargetClassText))
     {
-        TargetManaSlot->SetPadding(FMargin(0.0f, 0.0f, 0.0f, 6.0f));
+        CSlot->SetPadding(FMargin(0.0f, 2.0f, 0.0f, 6.0f));
     }
 
-    RespawnHintText = WidgetTree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass());
-    RespawnHintText->SetColorAndOpacity(FSlateColor(FLinearColor(0.98f, 0.76f, 0.42f, 1.0f)));
-    FSlateFontInfo RespawnFont = RespawnHintText->GetFont();
-    RespawnFont.Size = 12;
-    RespawnFont.TypefaceFontName = TEXT("Bold");
-    RespawnHintText->SetFont(RespawnFont);
-    RespawnHintText->SetAutoWrapText(true);
-    RespawnHintText->SetVisibility(ESlateVisibility::Collapsed);
-    if (UVerticalBoxSlot* RespawnSlot = Layout->AddChildToVerticalBox(RespawnHintText))
+    // Target health bar
     {
-        RespawnSlot->SetPadding(FMargin(0.0f, 0.0f, 0.0f, 6.0f));
+        UOverlay* HealthOverlay = WidgetTree->ConstructWidget<UOverlay>(UOverlay::StaticClass());
+        USizeBox* HealthSizeBox = WidgetTree->ConstructWidget<USizeBox>(USizeBox::StaticClass());
+        HealthSizeBox->SetHeightOverride(18.0f);
+        HealthSizeBox->AddChild(HealthOverlay);
+
+        TargetHealthBar = MakeStyledBar(HUDColors::HealthFill, HUDColors::HealthBg, 18.0f);
+        HealthOverlay->AddChildToOverlay(TargetHealthBar);
+
+        TargetHealthValueText = WidgetTree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass());
+        TargetHealthValueText->SetColorAndOpacity(FSlateColor(FLinearColor::White));
+        FSlateFontInfo THFont = TargetHealthValueText->GetFont();
+        THFont.Size = 9;
+        THFont.TypefaceFontName = TEXT("Bold");
+        TargetHealthValueText->SetFont(THFont);
+        if (UOverlaySlot* ValSlot = HealthOverlay->AddChildToOverlay(TargetHealthValueText))
+        {
+            ValSlot->SetHorizontalAlignment(HAlign_Center);
+            ValSlot->SetVerticalAlignment(VAlign_Center);
+        }
+
+        if (UVerticalBoxSlot* HSlot = Content->AddChildToVerticalBox(HealthSizeBox))
+        {
+            HSlot->SetPadding(FMargin(0.0f, 0.0f, 0.0f, 3.0f));
+        }
+    }
+
+    // Target mana bar
+    {
+        UOverlay* ManaOverlay = WidgetTree->ConstructWidget<UOverlay>(UOverlay::StaticClass());
+        USizeBox* ManaSizeBox = WidgetTree->ConstructWidget<USizeBox>(USizeBox::StaticClass());
+        ManaSizeBox->SetHeightOverride(14.0f);
+        ManaSizeBox->AddChild(ManaOverlay);
+
+        TargetManaBar = MakeStyledBar(HUDColors::ManaFill, HUDColors::ManaBg, 14.0f);
+        ManaOverlay->AddChildToOverlay(TargetManaBar);
+
+        TargetManaValueText = WidgetTree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass());
+        TargetManaValueText->SetColorAndOpacity(FSlateColor(FLinearColor::White));
+        FSlateFontInfo TMFont = TargetManaValueText->GetFont();
+        TMFont.Size = 8;
+        TargetManaValueText->SetFont(TMFont);
+        if (UOverlaySlot* ValSlot = ManaOverlay->AddChildToOverlay(TargetManaValueText))
+        {
+            ValSlot->SetHorizontalAlignment(HAlign_Center);
+            ValSlot->SetVerticalAlignment(VAlign_Center);
+        }
+
+        Content->AddChildToVerticalBox(ManaSizeBox);
+    }
+}
+
+// ─────────────────────────────────────────────────────────────
+// Layout: Combat Log (left side)
+// ─────────────────────────────────────────────────────────────
+void UMOBAMMOGameHUDWidget::BuildCombatLog(UCanvasPanel* Canvas)
+{
+    UBorder* LogBg = MakeGlassPanel(HUDColors::PanelBg, 0.60f);
+    LogBg->SetPadding(FMargin(12.0f, 8.0f));
+
+    UCanvasPanelSlot* LogSlot = Canvas->AddChildToCanvas(LogBg);
+    if (LogSlot)
+    {
+        LogSlot->SetAnchors(FAnchors(0.0f, 0.0f, 0.0f, 0.0f));        // top-left
+        LogSlot->SetAlignment(FVector2D(0.0f, 0.0f));
+        LogSlot->SetPosition(FVector2D(20.0f, 20.0f));
+        LogSlot->SetSize(FVector2D(340.0f, 180.0f));
+        LogSlot->SetAutoSize(false);
     }
 
     CombatLogText = WidgetTree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass());
-    CombatLogText->SetColorAndOpacity(FSlateColor(FLinearColor(0.78f, 0.90f, 0.92f, 0.95f)));
-    FSlateFontInfo CombatFont = CombatLogText->GetFont();
-    CombatFont.Size = 11;
-    CombatLogText->SetFont(CombatFont);
+    CombatLogText->SetColorAndOpacity(FSlateColor(HUDColors::TextSecondary));
+    FSlateFontInfo LogFont = CombatLogText->GetFont();
+    LogFont.Size = 10;
+    CombatLogText->SetFont(LogFont);
     CombatLogText->SetAutoWrapText(true);
-    Layout->AddChildToVerticalBox(CombatLogText);
-    CombatLogText->SetVisibility(ESlateVisibility::SelfHitTestInvisible);
+    LogBg->SetContent(CombatLogText);
+}
+
+// ─────────────────────────────────────────────────────────────
+// Layout: Score Bar (top-center)
+// ─────────────────────────────────────────────────────────────
+void UMOBAMMOGameHUDWidget::BuildScoreBar(UCanvasPanel* Canvas)
+{
+    UBorder* ScoreBg = MakeGlassPanel(HUDColors::PanelBg, 0.75f);
+    ScoreBg->SetPadding(FMargin(20.0f, 6.0f));
+
+    UCanvasPanelSlot* ScoreSlot = Canvas->AddChildToCanvas(ScoreBg);
+    if (ScoreSlot)
+    {
+        ScoreSlot->SetAnchors(FAnchors(0.5f, 0.0f, 0.5f, 0.0f));      // top-center
+        ScoreSlot->SetAlignment(FVector2D(0.5f, 0.0f));
+        ScoreSlot->SetPosition(FVector2D(0.0f, 12.0f));
+        ScoreSlot->SetAutoSize(true);
+    }
+
+    UHorizontalBox* ScoreRow = WidgetTree->ConstructWidget<UHorizontalBox>(UHorizontalBox::StaticClass());
+    ScoreBg->SetContent(ScoreRow);
+
+    KillDeathText = WidgetTree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass());
+    KillDeathText->SetColorAndOpacity(FSlateColor(HUDColors::TextPrimary));
+    FSlateFontInfo KDFont = KillDeathText->GetFont();
+    KDFont.Size = 16;
+    KDFont.TypefaceFontName = TEXT("Bold");
+    KillDeathText->SetFont(KDFont);
+    ScoreRow->AddChildToHorizontalBox(KillDeathText);
+
+    // Separator
+    UTextBlock* Sep = WidgetTree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass());
+    Sep->SetColorAndOpacity(FSlateColor(HUDColors::TextSecondary));
+    FSlateFontInfo SepFont = Sep->GetFont();
+    SepFont.Size = 14;
+    Sep->SetFont(SepFont);
+    Sep->SetText(FText::FromString(TEXT("  |  ")));
+    ScoreRow->AddChildToHorizontalBox(Sep);
+
+    PlayersOnlineText = WidgetTree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass());
+    PlayersOnlineText->SetColorAndOpacity(FSlateColor(HUDColors::TextCyan));
+    FSlateFontInfo OnlineFont = PlayersOnlineText->GetFont();
+    OnlineFont.Size = 12;
+    PlayersOnlineText->SetFont(OnlineFont);
+    if (UHorizontalBoxSlot* OnlineSlot = ScoreRow->AddChildToHorizontalBox(PlayersOnlineText))
+    {
+        OnlineSlot->SetVerticalAlignment(VAlign_Center);
+    }
+
+    UTextBlock* RosterSep = WidgetTree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass());
+    RosterSep->SetColorAndOpacity(FSlateColor(HUDColors::TextSecondary));
+    FSlateFontInfo RosterSepFont = RosterSep->GetFont();
+    RosterSepFont.Size = 12;
+    RosterSep->SetFont(RosterSepFont);
+    RosterSep->SetText(FText::FromString(TEXT("  |  Iris: ")));
+    ScoreRow->AddChildToHorizontalBox(RosterSep);
 
     RosterText = WidgetTree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass());
-    RosterText->SetColorAndOpacity(FSlateColor(FLinearColor(0.74f, 0.84f, 0.90f, 0.95f)));
+    RosterText->SetColorAndOpacity(FSlateColor(HUDColors::TextSecondary));
     FSlateFontInfo RosterFont = RosterText->GetFont();
     RosterFont.Size = 10;
     RosterText->SetFont(RosterFont);
-    RosterText->SetAutoWrapText(true);
-    if (UVerticalBoxSlot* RosterSlot = Layout->AddChildToVerticalBox(RosterText))
+    if (UHorizontalBoxSlot* RosterSlot = ScoreRow->AddChildToHorizontalBox(RosterText))
     {
-        RosterSlot->SetPadding(FMargin(0.0f, 8.0f, 0.0f, 0.0f));
+        RosterSlot->SetVerticalAlignment(VAlign_Center);
     }
-
-    DetailText->SetAutoWrapText(true);
-    StatusText->SetAutoWrapText(true);
 }
 
+// ─────────────────────────────────────────────────────────────
+// Layout: Center Notifications
+// ─────────────────────────────────────────────────────────────
+void UMOBAMMOGameHUDWidget::BuildCenterNotifications(UCanvasPanel* Canvas)
+{
+    // Combat event flash (center-top area)
+    CombatEventText = WidgetTree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass());
+    CombatEventText->SetColorAndOpacity(FSlateColor(FLinearColor(1.0f, 0.86f, 0.54f, 0.0f)));
+    FSlateFontInfo EventFont = CombatEventText->GetFont();
+    EventFont.Size = 18;
+    EventFont.TypefaceFontName = TEXT("Bold");
+    CombatEventText->SetFont(EventFont);
+    CombatEventText->SetJustification(ETextJustify::Center);
+    if (UCanvasPanelSlot* EventSlot = Canvas->AddChildToCanvas(CombatEventText))
+    {
+        EventSlot->SetAnchors(FAnchors(0.5f, 0.15f, 0.5f, 0.15f));
+        EventSlot->SetAlignment(FVector2D(0.5f, 0.5f));
+        EventSlot->SetAutoSize(true);
+    }
+
+    // Action hint (bottom-center, above ability bar)
+    ActionHintText = WidgetTree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass());
+    ActionHintText->SetColorAndOpacity(FSlateColor(HUDColors::TextGold));
+    FSlateFontInfo HintFont = ActionHintText->GetFont();
+    HintFont.Size = 12;
+    ActionHintText->SetFont(HintFont);
+    ActionHintText->SetJustification(ETextJustify::Center);
+    ActionHintText->SetAutoWrapText(true);
+    if (UCanvasPanelSlot* HintSlot = Canvas->AddChildToCanvas(ActionHintText))
+    {
+        HintSlot->SetAnchors(FAnchors(0.5f, 1.0f, 0.5f, 1.0f));
+        HintSlot->SetAlignment(FVector2D(0.5f, 1.0f));
+        HintSlot->SetPosition(FVector2D(0.0f, -140.0f));
+        HintSlot->SetSize(FVector2D(600.0f, 40.0f));
+        HintSlot->SetAutoSize(false);
+    }
+
+    // Arc charge indicator (below action hint)
+    ArcChargeText = WidgetTree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass());
+    ArcChargeText->SetColorAndOpacity(FSlateColor(HUDColors::TextCyan));
+    FSlateFontInfo ArcFont = ArcChargeText->GetFont();
+    ArcFont.Size = 11;
+    ArcFont.TypefaceFontName = TEXT("Bold");
+    ArcChargeText->SetFont(ArcFont);
+    ArcChargeText->SetJustification(ETextJustify::Center);
+    if (UCanvasPanelSlot* ArcSlot = Canvas->AddChildToCanvas(ArcChargeText))
+    {
+        ArcSlot->SetAnchors(FAnchors(0.5f, 1.0f, 0.5f, 1.0f));
+        ArcSlot->SetAlignment(FVector2D(0.5f, 1.0f));
+        ArcSlot->SetPosition(FVector2D(0.0f, -118.0f));
+        ArcSlot->SetAutoSize(true);
+    }
+
+    // Respawn hint (center screen)
+    RespawnHintText = WidgetTree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass());
+    RespawnHintText->SetColorAndOpacity(FSlateColor(HUDColors::TextDanger));
+    FSlateFontInfo RespawnFont = RespawnHintText->GetFont();
+    RespawnFont.Size = 22;
+    RespawnFont.TypefaceFontName = TEXT("Bold");
+    RespawnHintText->SetFont(RespawnFont);
+    RespawnHintText->SetJustification(ETextJustify::Center);
+    RespawnHintText->SetVisibility(ESlateVisibility::Collapsed);
+    if (UCanvasPanelSlot* RespawnSlot = Canvas->AddChildToCanvas(RespawnHintText))
+    {
+        RespawnSlot->SetAnchors(FAnchors(0.5f, 0.4f, 0.5f, 0.4f));
+        RespawnSlot->SetAlignment(FVector2D(0.5f, 0.5f));
+        RespawnSlot->SetAutoSize(true);
+    }
+
+    // Floating damage/heal feedback
+    FloatingFeedbackText = WidgetTree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass());
+    FloatingFeedbackText->SetVisibility(ESlateVisibility::HitTestInvisible);
+    FloatingFeedbackText->SetText(FText::GetEmpty());
+    FloatingFeedbackText->SetColorAndOpacity(FSlateColor(FLinearColor(0.92f, 0.32f, 0.34f, 0.0f)));
+    FSlateFontInfo FloatFont = FloatingFeedbackText->GetFont();
+    FloatFont.Size = 18;
+    FloatFont.TypefaceFontName = TEXT("Bold");
+    FloatingFeedbackText->SetFont(FloatFont);
+    if (UCanvasPanelSlot* FloatSlot = Canvas->AddChildToCanvas(FloatingFeedbackText))
+    {
+        FloatSlot->SetAnchors(FAnchors(0.0f, 0.0f, 0.0f, 0.0f));
+        FloatSlot->SetPosition(FVector2D(0.0f, 0.0f));
+        FloatSlot->SetAutoSize(true);
+    }
+}
+
+// ─────────────────────────────────────────────────────────────
+// Bind
+// ─────────────────────────────────────────────────────────────
 void UMOBAMMOGameHUDWidget::BindToSubsystem(UMOBAMMOBackendSubsystem* BackendSubsystem)
 {
     if (!BackendSubsystem || bBoundToSubsystem)
@@ -358,6 +802,9 @@ void UMOBAMMOGameHUDWidget::BindToReplicatedState()
     }
 }
 
+// ─────────────────────────────────────────────────────────────
+// Update
+// ─────────────────────────────────────────────────────────────
 void UMOBAMMOGameHUDWidget::UpdateTexts()
 {
     constexpr float RespawnBarReferenceDuration = 3.0f;
@@ -381,16 +828,12 @@ void UMOBAMMOGameHUDWidget::UpdateTexts()
     FString LifeState = TEXT("Dead");
     FString LastCombatLog = TEXT("No combat events yet.");
     FString TargetDisplayText = TEXT("No target");
-    FString TargetPanelDisplay = TEXT("Target Panel: No target selected.");
-    FString TargetStatusDisplay = TEXT("Target State: No target lock.");
-    FString AbilityTrayDisplay;
-    FString CombatFeedDisplay = TEXT("Combat Feed: No recent events.");
-    FString RosterDisplay = TEXT("Combat Roster:\n- No active combatants.");
-    FString ActionHintDisplay = TEXT("No target locked. Press 6 to cycle an enemy.");
-    FString ArcChargeDisplay = TEXT("Arc Charge: Dormant");
+    FString CombatFeedDisplay = TEXT("");
+    FString RosterDisplay = TEXT("waiting");
+    FString MinionThreatDisplay;
     float ServerWorldTimeSeconds = GetWorld() ? GetWorld()->GetTimeSeconds() : 0.0f;
     FString SelectedTargetCharacterId;
-    FString FloatingFeedbackText;
+    FString FloatingFeedbackStr;
     bool bFloatingFeedbackHealing = false;
     float FloatingFeedbackAlpha = 0.0f;
     FVector2D FloatingFeedbackScreenPosition(24.0f, 24.0f);
@@ -399,7 +842,11 @@ void UMOBAMMOGameHUDWidget::UpdateTexts()
     float TargetMana = 0.0f;
     float TargetMaxMana = 0.0f;
     bool bHasTarget = false;
-    FString TargetRangeText = TEXT("Range unknown");
+    FString TargetRangeStr = TEXT("---");
+    bool bTargetInRange = false;
+    FString TargetName;
+    FString TargetClass;
+    int32 TargetLevel = 1;
 
     if (const UWorld* World = GetWorld())
     {
@@ -415,7 +862,7 @@ void UMOBAMMOGameHUDWidget::UpdateTexts()
 
         if (const AMOBAMMOPlayerState* PlayerState = PlayerController->GetPlayerState<AMOBAMMOPlayerState>())
         {
-            CharacterName = PlayerState->GetCharacterName().IsEmpty() ? TEXT("-") : PlayerState->GetCharacterName();
+            CharacterName = PlayerState->GetCharacterName().IsEmpty() ? TEXT("Hero") : PlayerState->GetCharacterName();
             ClassId = PlayerState->GetClassId().IsEmpty() ? TEXT("-") : PlayerState->GetClassId();
             CharacterLevel = PlayerState->GetCharacterLevel();
             Health = PlayerState->GetCurrentHealth();
@@ -453,11 +900,78 @@ void UMOBAMMOGameHUDWidget::UpdateTexts()
             const TArray<FString>& CombatFeed = GameState->GetCombatFeed();
             if (!CombatFeed.IsEmpty())
             {
-                CombatFeedDisplay = TEXT("Combat Feed:");
-                for (const FString& CombatEntry : CombatFeed)
+                for (int32 FeedIndex = FMath::Max(0, CombatFeed.Num() - 6); FeedIndex < CombatFeed.Num(); ++FeedIndex)
                 {
-                    CombatFeedDisplay += FString::Printf(TEXT("\n- %s"), *CombatEntry);
+                    if (!CombatFeedDisplay.IsEmpty())
+                    {
+                        CombatFeedDisplay += TEXT("\n");
+                    }
+                    CombatFeedDisplay += CombatFeed[FeedIndex];
                 }
+            }
+
+            RosterDisplay.Reset();
+            int32 RosterCount = 0;
+            for (APlayerState* IteratedPlayerState : GameState->PlayerArray)
+            {
+                const AMOBAMMOPlayerState* RosterPlayerState = Cast<AMOBAMMOPlayerState>(IteratedPlayerState);
+                if (!RosterPlayerState)
+                {
+                    continue;
+                }
+
+                if (!RosterDisplay.IsEmpty())
+                {
+                    RosterDisplay += TEXT("  /  ");
+                }
+
+                const FString RosterName = RosterPlayerState->GetCharacterName().IsEmpty()
+                    ? RosterPlayerState->GetPlayerName()
+                    : RosterPlayerState->GetCharacterName();
+                const FString RosterTarget = RosterPlayerState->GetSelectedTargetName().IsEmpty()
+                    ? TEXT("none")
+                    : RosterPlayerState->GetSelectedTargetName();
+                RosterDisplay += FString::Printf(
+                    TEXT("%s %.0fHP %.0fMP -> %s"),
+                    *RosterName,
+                    RosterPlayerState->GetCurrentHealth(),
+                    RosterPlayerState->GetCurrentMana(),
+                    *RosterTarget
+                );
+                ++RosterCount;
+
+                if (RosterCount >= 3)
+                {
+                    if (ConnectedPlayers > RosterCount)
+                    {
+                        RosterDisplay += FString::Printf(TEXT("  +%d"), ConnectedPlayers - RosterCount);
+                    }
+                    break;
+                }
+            }
+
+            if (RosterDisplay.IsEmpty())
+            {
+                RosterDisplay = TEXT("no replicated players yet");
+            }
+
+            const float MinionThreatAge = ServerWorldTimeSeconds - GameState->GetTrainingMinionLastStrikeServerTime();
+            if (!GameState->GetTrainingMinionThreatName().IsEmpty() && MinionThreatAge >= 0.0f && MinionThreatAge <= 8.0f)
+            {
+                const float MinionAggroRemaining = FMath::Max(0.0f, GameState->GetTrainingMinionAggroEndServerTime() - ServerWorldTimeSeconds);
+                MinionThreatDisplay = MinionAggroRemaining > KINDA_SMALL_NUMBER
+                    ? FString::Printf(
+                        TEXT("AI AGGRO: %s -> %s (%.1fs)"),
+                        *GameState->GetTrainingMinionLastStrikeName(),
+                        *GameState->GetTrainingMinionThreatName(),
+                        MinionAggroRemaining
+                    )
+                    : FString::Printf(
+                        TEXT("AI Threat: %s -> %s (%.1fs ago)"),
+                        *GameState->GetTrainingMinionLastStrikeName(),
+                        *GameState->GetTrainingMinionThreatName(),
+                        MinionThreatAge
+                    );
             }
 
             if (!SelectedTargetCharacterId.IsEmpty())
@@ -470,23 +984,9 @@ void UMOBAMMOGameHUDWidget::UpdateTexts()
                         continue;
                     }
 
-                    TargetPanelDisplay = FString::Printf(
-                        TEXT("Target Panel: %s [%s] Lv.%d | HP %.0f/%.0f | MP %.0f/%.0f | %s"),
-                        *TargetPlayerState->GetCharacterName(),
-                        *TargetPlayerState->GetClassId(),
-                        TargetPlayerState->GetCharacterLevel(),
-                        TargetPlayerState->GetCurrentHealth(),
-                        TargetPlayerState->GetMaxHealth(),
-                        TargetPlayerState->GetCurrentMana(),
-                        TargetPlayerState->GetMaxMana(),
-                        TargetPlayerState->IsAlive() ? TEXT("Alive") : TEXT("Down")
-                    );
-                    TargetStatusDisplay = FString::Printf(
-                        TEXT("Target State: K/D %d/%d | %s"),
-                        TargetPlayerState->GetKills(),
-                        TargetPlayerState->GetDeaths(),
-                        TargetPlayerState->IsAlive() ? TEXT("Ready to engage") : TEXT("Target down")
-                    );
+                    TargetName = TargetPlayerState->GetCharacterName();
+                    TargetClass = TargetPlayerState->GetClassId();
+                    TargetLevel = TargetPlayerState->GetCharacterLevel();
                     TargetHealth = TargetPlayerState->GetCurrentHealth();
                     TargetMaxHealth = TargetPlayerState->GetMaxHealth();
                     TargetMana = TargetPlayerState->GetCurrentMana();
@@ -500,18 +1000,17 @@ void UMOBAMMOGameHUDWidget::UpdateTexts()
                         if (IsValid(LocalPawn) && IsValid(TargetPawn))
                         {
                             const float DistanceUnits = FVector::Dist(LocalPawn->GetActorLocation(), TargetPawn->GetActorLocation());
-                            TargetRangeText = FString::Printf(
-                                TEXT("%s | %.0f units"),
-                                DistanceUnits <= 1800.0f ? TEXT("IN RANGE") : TEXT("OUT OF RANGE"),
-                                DistanceUnits
-                            );
+                            bTargetInRange = DistanceUnits <= 1800.0f;
+                            TargetRangeStr = bTargetInRange
+                                ? FString::Printf(TEXT("%.0fm IN RANGE"), DistanceUnits / 100.0f)
+                                : FString::Printf(TEXT("%.0fm"), DistanceUnits / 100.0f);
                         }
                     }
 
                     const float FeedbackRemaining = FMath::Max(0.0f, TargetPlayerState->GetIncomingCombatFeedbackEndServerTime() - ServerWorldTimeSeconds);
                     if (FeedbackRemaining > KINDA_SMALL_NUMBER)
                     {
-                        FloatingFeedbackText = TargetPlayerState->GetIncomingCombatFeedbackText();
+                        FloatingFeedbackStr = TargetPlayerState->GetIncomingCombatFeedbackText();
                         bFloatingFeedbackHealing = TargetPlayerState->IsIncomingCombatFeedbackHealing();
                         FloatingFeedbackAlpha = FMath::Clamp(FeedbackRemaining / 1.25f, 0.0f, 1.0f);
 
@@ -531,71 +1030,76 @@ void UMOBAMMOGameHUDWidget::UpdateTexts()
                     }
                     break;
                 }
-            }
 
-            if (!GameState->PlayerArray.IsEmpty())
-            {
-                TArray<const AMOBAMMOPlayerState*> Combatants;
-                for (APlayerState* IteratedPlayerState : GameState->PlayerArray)
+                if (!bHasTarget && SelectedTargetCharacterId == AMOBAMMOTrainingMinionActor::GetTrainingMinionCharacterId())
                 {
-                    if (const AMOBAMMOPlayerState* Candidate = Cast<AMOBAMMOPlayerState>(IteratedPlayerState))
+                    TargetName = AMOBAMMOTrainingMinionActor::GetTrainingMinionName();
+                    TargetClass = TEXT("ai minion");
+                    TargetLevel = 1;
+                    TargetMana = 0.0f;
+                    TargetMaxMana = 0.0f;
+                    bHasTarget = true;
+                    TargetRangeStr = TEXT("MINION LOST");
+
+                    for (TActorIterator<AMOBAMMOTrainingMinionActor> It(World); It; ++It)
                     {
-                        Combatants.Add(Candidate);
+                        const AMOBAMMOTrainingMinionActor* MinionActor = *It;
+                        if (!IsValid(MinionActor))
+                        {
+                            continue;
+                        }
+
+                        TargetHealth = MinionActor->GetCurrentHealth();
+                        TargetMaxHealth = MinionActor->GetMaxHealth();
+                        if (const APlayerController* OwningController = GetOwningPlayer())
+                        {
+                            const APawn* LocalPawn = OwningController->GetPawn();
+                            if (IsValid(LocalPawn))
+                            {
+                                const float DistanceUnits = FVector::Dist(LocalPawn->GetActorLocation(), MinionActor->GetActorLocation());
+                                bTargetInRange = DistanceUnits <= 1800.0f;
+                                TargetRangeStr = bTargetInRange
+                                    ? FString::Printf(TEXT("%.0fm IN RANGE"), DistanceUnits / 100.0f)
+                                    : FString::Printf(TEXT("%.0fm"), DistanceUnits / 100.0f);
+                            }
+                        }
+                        break;
                     }
                 }
 
-                Combatants.Sort([](const AMOBAMMOPlayerState& Left, const AMOBAMMOPlayerState& Right)
+                if (!bHasTarget && SelectedTargetCharacterId == GameState->GetTrainingDummyCharacterId())
                 {
-                    if (Left.GetKills() == Right.GetKills())
-                    {
-                        return Left.GetCharacterName() < Right.GetCharacterName();
-                    }
-                    return Left.GetKills() > Right.GetKills();
-                });
-
-                RosterDisplay = TEXT("Combat Roster:");
-                const int32 MaxEntries = FMath::Min(Combatants.Num(), 4);
-                for (int32 Index = 0; Index < MaxEntries; ++Index)
-                {
-                    const AMOBAMMOPlayerState* Combatant = Combatants[Index];
-                    RosterDisplay += FString::Printf(
-                        TEXT("\n%d. %s [%s]  K/D %d/%d  HP %.0f"),
-                        Index + 1,
-                        *Combatant->GetCharacterName(),
-                        *Combatant->GetClassId(),
-                        Combatant->GetKills(),
-                        Combatant->GetDeaths(),
-                        Combatant->GetCurrentHealth()
-                    );
+                    TargetName = GameState->GetTrainingDummyName();
+                    TargetClass = TEXT("training");
+                    TargetLevel = 1;
+                    TargetHealth = GameState->GetTrainingDummyHealth();
+                    TargetMaxHealth = GameState->GetTrainingDummyMaxHealth();
+                    TargetMana = GameState->GetTrainingDummyMana();
+                    TargetMaxMana = GameState->GetTrainingDummyMaxMana();
+                    bHasTarget = true;
+                    bTargetInRange = true;
+                    TargetRangeStr = TEXT("DUMMY LOCK");
                 }
             }
         }
     }
 
-    if (StatusText)
+    // ── Player Frame ──
+    if (PlayerNameText)
     {
-        StatusText->SetText(FText::FromString(FString::Printf(
-            TEXT("%s [%s] | Level %d | %s"),
-            *CharacterName,
-            *ClassId,
-            CharacterLevel,
-            *LifeState
-        )));
+        PlayerNameText->SetText(FText::FromString(CharacterName));
     }
 
-    if (DetailText)
+    if (PlayerClassLevelText)
     {
-        DetailText->SetText(FText::FromString(FString::Printf(
-            TEXT("HP %.0f/%.0f | MP %.0f/%.0f | K/D %d/%d | Players %d | %s"),
-            Health,
-            MaxHealth,
-            Mana,
-            MaxMana,
-            KillCount,
-            DeathCount,
-            ConnectedPlayers,
-            *TargetDisplayText
-        )));
+        PlayerClassLevelText->SetText(FText::FromString(FString::Printf(TEXT("%s  ·  Level %d"), *ClassId, CharacterLevel)));
+    }
+
+    if (PlayerLifeStateText)
+    {
+        const bool bAlive = LifeState == TEXT("Alive");
+        PlayerLifeStateText->SetText(FText::FromString(bAlive ? TEXT("● ALIVE") : TEXT("● DEAD")));
+        PlayerLifeStateText->SetColorAndOpacity(FSlateColor(bAlive ? HUDColors::TextAlive : HUDColors::TextDead));
     }
 
     if (HealthBar)
@@ -603,11 +1107,87 @@ void UMOBAMMOGameHUDWidget::UpdateTexts()
         HealthBar->SetPercent(MaxHealth > 0.0f ? Health / MaxHealth : 0.0f);
     }
 
+    if (HealthValueText)
+    {
+        HealthValueText->SetText(FText::FromString(FString::Printf(TEXT("%.0f / %.0f"), Health, MaxHealth)));
+    }
+
     if (ManaBar)
     {
         ManaBar->SetPercent(MaxMana > 0.0f ? Mana / MaxMana : 0.0f);
     }
 
+    if (ManaValueText)
+    {
+        ManaValueText->SetText(FText::FromString(FString::Printf(TEXT("%.0f / %.0f"), Mana, MaxMana)));
+    }
+
+    // ── Score Bar ──
+    if (KillDeathText)
+    {
+        KillDeathText->SetText(FText::FromString(FString::Printf(TEXT("K %d  /  D %d"), KillCount, DeathCount)));
+    }
+
+    if (PlayersOnlineText)
+    {
+        PlayersOnlineText->SetText(FText::FromString(FString::Printf(TEXT("%d Online"), ConnectedPlayers)));
+    }
+
+    if (RosterText)
+    {
+        RosterText->SetText(FText::FromString(RosterDisplay));
+    }
+
+    // ── Target Frame ──
+    if (TargetFrameBorder)
+    {
+        TargetFrameBorder->SetVisibility(bHasTarget ? ESlateVisibility::Visible : ESlateVisibility::Collapsed);
+    }
+
+    if (bHasTarget)
+    {
+        if (TargetNameText)
+        {
+            TargetNameText->SetText(FText::FromString(TargetName));
+        }
+
+        if (TargetClassText)
+        {
+            const bool bSelectedMinion = SelectedTargetCharacterId == AMOBAMMOTrainingMinionActor::GetTrainingMinionCharacterId();
+            const FString TargetClassDisplay = bSelectedMinion && !MinionThreatDisplay.IsEmpty()
+                ? FString::Printf(TEXT("%s  -  %s"), *TargetClass, *MinionThreatDisplay)
+                : FString::Printf(TEXT("%s  -  Lv.%d"), *TargetClass, TargetLevel);
+            TargetClassText->SetText(FText::FromString(TargetClassDisplay));
+        }
+
+        if (TargetRangeText)
+        {
+            TargetRangeText->SetText(FText::FromString(TargetRangeStr));
+            TargetRangeText->SetColorAndOpacity(FSlateColor(bTargetInRange ? HUDColors::TextSuccess : HUDColors::TextDanger));
+        }
+
+        if (TargetHealthBar)
+        {
+            TargetHealthBar->SetPercent(TargetMaxHealth > 0.0f ? TargetHealth / TargetMaxHealth : 0.0f);
+        }
+
+        if (TargetHealthValueText)
+        {
+            TargetHealthValueText->SetText(FText::FromString(FString::Printf(TEXT("%.0f / %.0f"), TargetHealth, TargetMaxHealth)));
+        }
+
+        if (TargetManaBar)
+        {
+            TargetManaBar->SetPercent(TargetMaxMana > 0.0f ? TargetMana / TargetMaxMana : 0.0f);
+        }
+
+        if (TargetManaValueText)
+        {
+            TargetManaValueText->SetText(FText::FromString(FString::Printf(TEXT("%.0f / %.0f"), TargetMana, TargetMaxMana)));
+        }
+    }
+
+    // ── Combat Event ──
     if (CombatEventText)
     {
         const float EventAlpha = CombatEventHighlightRemaining > 0.0f
@@ -617,82 +1197,50 @@ void UMOBAMMOGameHUDWidget::UpdateTexts()
         CombatEventText->SetColorAndOpacity(FSlateColor(FLinearColor(1.0f, 0.86f, 0.54f, EventAlpha)));
     }
 
-    const FMOBAMMOAbilityDefinition ArcBurst = MOBAMMOAbilitySet::ArcBurst();
-    const FMOBAMMOAbilityDefinition Renew = MOBAMMOAbilitySet::Renew();
-    const FMOBAMMOAbilityDefinition DrainPulse = MOBAMMOAbilitySet::DrainPulse();
-    const FMOBAMMOAbilityDefinition ManaSurge = MOBAMMOAbilitySet::ManaSurge();
-    const FMOBAMMOAbilityDefinition Reforge = MOBAMMOAbilitySet::Reforge();
-    const bool bTargetInRange = TargetRangeText.StartsWith(TEXT("IN RANGE"));
+    // ── Combat Log ──
+    if (CombatLogText)
+    {
+        FString LogDisplay = TEXT("─── Combat Log ───");
+        if (!CombatFeedDisplay.IsEmpty())
+        {
+            LogDisplay += TEXT("\n") + CombatFeedDisplay;
+        }
+        else
+        {
+            LogDisplay += TEXT("\nNo recent events.");
+        }
+        CombatLogText->SetText(FText::FromString(LogDisplay));
+    }
 
+    // ── Action Hint ──
+    FString ActionHintDisplay;
     if (LifeState == TEXT("Dead"))
     {
         ActionHintDisplay = RespawnCooldownRemaining > KINDA_SMALL_NUMBER
-            ? FString::Printf(TEXT("Reforge is charging. Return in %.1fs."), RespawnCooldownRemaining)
-            : TEXT("Reforge is ready. Press 5 to return to the fight.");
+            ? FString::Printf(TEXT("Reforge charging... %.1fs"), RespawnCooldownRemaining)
+            : TEXT("Press [5] to Reforge");
     }
     else if (!bHasTarget)
     {
-        ActionHintDisplay = TEXT("No target locked. Press 6 to cycle an enemy.");
+        ActionHintDisplay = MinionThreatDisplay.IsEmpty()
+            ? TEXT("Aim at Training Dummy and press [LMB]/[E], or press [6]. Then use [1] Arc Burst / [3] Drain Pulse")
+            : MinionThreatDisplay;
     }
     else if (!bTargetInRange)
     {
-        ActionHintDisplay = FString::Printf(TEXT("%s is out of range. Step in or switch targets."), *TargetDisplayText);
+        ActionHintDisplay = TEXT("Target out of range — move closer");
     }
     else if (DamageCooldownRemaining > KINDA_SMALL_NUMBER)
     {
-        ActionHintDisplay = FString::Printf(TEXT("Arc Burst recovers in %.1fs. Renew or Drain Pulse are safer now."), DamageCooldownRemaining);
+        ActionHintDisplay = FString::Printf(TEXT("Arc Burst in %.1fs — use Renew or Drain Pulse"), DamageCooldownRemaining);
     }
-    else if (Mana < ArcBurst.ManaCost)
+    else if (Mana < MOBAMMOAbilitySet::ArcBurst().ManaCost)
     {
-        ActionHintDisplay = TEXT("Low mana. Use Mana Surge or Drain Pulse before bursting.");
+        ActionHintDisplay = TEXT("Low mana — use Mana Surge first");
     }
     else
     {
-        ActionHintDisplay = FString::Printf(TEXT("%s is exposed. Arc Burst is primed."), *TargetDisplayText);
-    }
-
-    if (ArcChargeRemaining > KINDA_SMALL_NUMBER)
-    {
-        ArcChargeDisplay = FString::Printf(
-            TEXT("Arc Charge: Empowered for %.1fs | Arc Burst gains bonus damage and reduced mana cost."),
-            ArcChargeRemaining
-        );
-    }
-
-    AbilityTrayDisplay = FString::Printf(
-        TEXT("[%s] %s %.1fs | [%s] %s %.1fs\n[%s] %s %.1fs | [%s] %s %.1fs | [%s] %s"),
-        *ArcBurst.KeyLabel,
-        *ArcBurst.Name,
-        DamageCooldownRemaining,
-        *Renew.KeyLabel,
-        *Renew.Name,
-        HealCooldownRemaining,
-        *DrainPulse.KeyLabel,
-        *DrainPulse.Name,
-        DrainCooldownRemaining,
-        *ManaSurge.KeyLabel,
-        *ManaSurge.Name,
-        ManaSurgeCooldownRemaining,
-        *Reforge.KeyLabel,
-        *Reforge.Name
-    );
-
-    if (AbilityTrayText)
-    {
-        AbilityTrayText->SetText(FText::FromString(AbilityTrayDisplay));
-    }
-
-    if (CombatLogText)
-    {
-        CombatLogText->SetText(FText::FromString(FString::Printf(
-            TEXT("Cooldowns: Arc Burst %.1fs | Renew %.1fs | Drain Pulse %.1fs | Mana Surge %.1fs\nLatest: %s\n%s"),
-            DamageCooldownRemaining,
-            HealCooldownRemaining,
-            DrainCooldownRemaining,
-            ManaSurgeCooldownRemaining,
-            *LastCombatLog,
-            *CombatFeedDisplay
-        )));
+        ActionHintDisplay = TEXT("Target exposed — Arc Burst ready!");
     }
 
     if (ActionHintText)
@@ -700,190 +1248,184 @@ void UMOBAMMOGameHUDWidget::UpdateTexts()
         ActionHintText->SetText(FText::FromString(ActionHintDisplay));
     }
 
+    // ── Arc Charge ──
     if (ArcChargeText)
     {
-        ArcChargeText->SetText(FText::FromString(ArcChargeDisplay));
-    }
-
-    if (TargetPanelText)
-    {
-        TargetPanelText->SetText(FText::FromString(TargetPanelDisplay));
-    }
-
-    if (TargetStatusText)
-    {
-        TargetStatusText->SetText(FText::FromString(FString::Printf(TEXT("%s | %s"), *TargetStatusDisplay, *TargetRangeText)));
-    }
-
-    if (FloatingTargetFeedbackText)
-    {
-        const bool bShowFloatingFeedback = !FloatingFeedbackText.IsEmpty() && FloatingFeedbackAlpha > 0.0f;
-        FloatingTargetFeedbackText->SetText(FText::FromString(bShowFloatingFeedback ? FloatingFeedbackText : TEXT("")));
-        FloatingTargetFeedbackText->SetColorAndOpacity(FSlateColor(
-            bFloatingFeedbackHealing
-                ? FLinearColor(0.34f, 0.96f, 0.62f, FloatingFeedbackAlpha)
-                : FLinearColor(0.98f, 0.34f, 0.38f, FloatingFeedbackAlpha)
-        ));
-        FloatingTargetFeedbackText->SetRenderTranslation(FloatingFeedbackScreenPosition);
-    }
-
-    if (TargetHealthBar)
-    {
-        TargetHealthBar->SetPercent(bHasTarget && TargetMaxHealth > 0.0f ? TargetHealth / TargetMaxHealth : 0.0f);
-        TargetHealthBar->SetVisibility(bHasTarget ? ESlateVisibility::Visible : ESlateVisibility::Collapsed);
-    }
-
-    if (TargetManaBar)
-    {
-        TargetManaBar->SetPercent(bHasTarget && TargetMaxMana > 0.0f ? TargetMana / TargetMaxMana : 0.0f);
-        TargetManaBar->SetVisibility(bHasTarget ? ESlateVisibility::Visible : ESlateVisibility::Collapsed);
-    }
-
-    const TArray<FMOBAMMOAbilityDefinition> AbilityDefinitions = {
-        ArcBurst,
-        Renew,
-        DrainPulse,
-        ManaSurge,
-        Reforge
-    };
-
-    for (int32 AbilityIndex = 0; AbilityIndex < AbilityDefinitions.Num(); ++AbilityIndex)
-    {
-        const FMOBAMMOAbilityDefinition& AbilityDefinition = AbilityDefinitions[AbilityIndex];
-        const bool bHasCooldown = AbilityDefinition.Cooldown > KINDA_SMALL_NUMBER;
-        float CooldownRemaining = 0.0f;
-        if (AbilityDefinition.Name == ArcBurst.Name)
+        if (ArcChargeRemaining > KINDA_SMALL_NUMBER)
         {
-            CooldownRemaining = DamageCooldownRemaining;
+            ArcChargeText->SetText(FText::FromString(FString::Printf(TEXT("⚡ ARC CHARGE  %.1fs"), ArcChargeRemaining)));
+            ArcChargeText->SetVisibility(ESlateVisibility::Visible);
         }
-        else if (AbilityDefinition.Name == Renew.Name)
+        else
         {
-            CooldownRemaining = HealCooldownRemaining;
-        }
-        else if (AbilityDefinition.Name == DrainPulse.Name)
-        {
-            CooldownRemaining = DrainCooldownRemaining;
-        }
-        else if (AbilityDefinition.Name == ManaSurge.Name)
-        {
-            CooldownRemaining = ManaSurgeCooldownRemaining;
-        }
-
-        if (AbilityCooldownTexts.IsValidIndex(AbilityIndex) && AbilityCooldownTexts[AbilityIndex])
-        {
-            FString StateLabel = TEXT("READY");
-            if (LifeState == TEXT("Dead") && AbilityDefinition.Kind != EMOBAMMOAbilityKind::Respawn)
-            {
-                StateLabel = TEXT("DOWN");
-            }
-            else if (AbilityDefinition.Kind == EMOBAMMOAbilityKind::Respawn && LifeState != TEXT("Dead"))
-            {
-                StateLabel = TEXT("LOCKED");
-            }
-            else if (AbilityDefinition.Name == DrainPulse.Name && !bHasTarget)
-            {
-                StateLabel = TEXT("NO TARGET");
-            }
-            else if (AbilityDefinition.Name == DrainPulse.Name && !TargetRangeText.StartsWith(TEXT("IN RANGE")))
-            {
-                StateLabel = TEXT("OUT OF RANGE");
-            }
-            else if (AbilityDefinition.Name == ArcBurst.Name && ArcChargeRemaining > KINDA_SMALL_NUMBER)
-            {
-                StateLabel = FString::Printf(TEXT("CHARGED %.1fs"), ArcChargeRemaining);
-            }
-            else if (bHasCooldown && CooldownRemaining > KINDA_SMALL_NUMBER)
-            {
-                StateLabel = FString::Printf(TEXT("CD %.1fs"), CooldownRemaining);
-            }
-            else if (AbilityDefinition.ManaCost > 0.0f && Mana < AbilityDefinition.ManaCost)
-            {
-                StateLabel = TEXT("NO MANA");
-            }
-
-            const FString CooldownLabel = FString::Printf(
-                TEXT("[%s] %s\n%s"),
-                *AbilityDefinition.KeyLabel,
-                *AbilityDefinition.Name,
-                *StateLabel
-            );
-            AbilityCooldownTexts[AbilityIndex]->SetText(FText::FromString(CooldownLabel));
-        }
-
-        if (AbilityCooldownBars.IsValidIndex(AbilityIndex) && AbilityCooldownBars[AbilityIndex])
-        {
-            float Percent = 1.0f;
-            if (bHasCooldown)
-            {
-                Percent = AbilityDefinition.Cooldown > 0.0f
-                    ? FMath::Clamp(1.0f - (CooldownRemaining / AbilityDefinition.Cooldown), 0.0f, 1.0f)
-                    : 1.0f;
-            }
-
-            AbilityCooldownBars[AbilityIndex]->SetPercent(Percent);
-            FLinearColor FillColor = FLinearColor(0.30f, 0.64f, 0.88f, 1.0f);
-            if (LifeState == TEXT("Dead") && AbilityDefinition.Kind != EMOBAMMOAbilityKind::Respawn)
-            {
-                FillColor = FLinearColor(0.32f, 0.18f, 0.18f, 1.0f);
-                Percent = 0.05f;
-                AbilityCooldownBars[AbilityIndex]->SetPercent(Percent);
-            }
-            else if (AbilityDefinition.Kind == EMOBAMMOAbilityKind::Respawn)
-            {
-                FillColor = LifeState == TEXT("Dead")
-                    ? FLinearColor(0.28f, 0.78f, 0.52f, 1.0f)
-                    : FLinearColor(0.24f, 0.24f, 0.28f, 1.0f);
-                const float RespawnPercent = RespawnBarReferenceDuration > 0.0f
-                    ? FMath::Clamp(1.0f - (RespawnCooldownRemaining / RespawnBarReferenceDuration), 0.0f, 1.0f)
-                    : 1.0f;
-                AbilityCooldownBars[AbilityIndex]->SetPercent(LifeState == TEXT("Dead") ? RespawnPercent : 0.15f);
-            }
-            else if (bHasCooldown && CooldownRemaining > KINDA_SMALL_NUMBER)
-            {
-                FillColor = FLinearColor(0.82f, 0.68f, 0.28f, 1.0f);
-            }
-            else if (AbilityDefinition.Name == ArcBurst.Name && ArcChargeRemaining > KINDA_SMALL_NUMBER)
-            {
-                FillColor = FLinearColor(0.44f, 0.82f, 1.0f, 1.0f);
-            }
-            else if (AbilityDefinition.Name == DrainPulse.Name && (!bHasTarget || !TargetRangeText.StartsWith(TEXT("IN RANGE"))))
-            {
-                FillColor = FLinearColor(0.52f, 0.26f, 0.22f, 1.0f);
-            }
-            else if (AbilityDefinition.ManaCost > 0.0f && Mana < AbilityDefinition.ManaCost)
-            {
-                FillColor = FLinearColor(0.58f, 0.24f, 0.24f, 1.0f);
-            }
-            else if (AbilityDefinition.Kind == EMOBAMMOAbilityKind::Damage)
-            {
-                FillColor = FLinearColor(0.86f, 0.34f, 0.36f, 1.0f);
-            }
-            else if (AbilityDefinition.Kind == EMOBAMMOAbilityKind::Heal)
-            {
-                FillColor = FLinearColor(0.30f, 0.78f, 0.52f, 1.0f);
-            }
-
-            AbilityCooldownBars[AbilityIndex]->SetFillColorAndOpacity(FillColor);
+            ArcChargeText->SetText(FText::GetEmpty());
+            ArcChargeText->SetVisibility(ESlateVisibility::Collapsed);
         }
     }
 
+    // ── Respawn Hint ──
     if (RespawnHintText)
     {
         const bool bShowRespawnHint = LifeState == TEXT("Dead");
         RespawnHintText->SetVisibility(bShowRespawnHint ? ESlateVisibility::Visible : ESlateVisibility::Collapsed);
         RespawnHintText->SetText(FText::FromString(
             RespawnCooldownRemaining > KINDA_SMALL_NUMBER
-                ? FString::Printf(TEXT("You are down. Reforge unlocks in %.1fs."), RespawnCooldownRemaining)
-                : TEXT("You are down. Press 5 to Reforge and return to the fight.")
+                ? FString::Printf(TEXT("YOU ARE DOWN\nReforge in %.1fs"), RespawnCooldownRemaining)
+                : TEXT("YOU ARE DOWN\nPress [5] to Reforge")
         ));
     }
 
-    if (RosterText)
+    // ── Floating Feedback ──
+    if (FloatingFeedbackText)
     {
-        RosterText->SetText(FText::FromString(RosterDisplay));
+        const bool bShowFloating = !FloatingFeedbackStr.IsEmpty() && FloatingFeedbackAlpha > 0.0f;
+        FloatingFeedbackText->SetText(FText::FromString(bShowFloating ? FloatingFeedbackStr : TEXT("")));
+        FloatingFeedbackText->SetColorAndOpacity(FSlateColor(
+            bFloatingFeedbackHealing
+                ? FLinearColor(0.34f, 0.96f, 0.62f, FloatingFeedbackAlpha)
+                : FLinearColor(0.98f, 0.34f, 0.38f, FloatingFeedbackAlpha)
+        ));
+        FloatingFeedbackText->SetRenderTranslation(FloatingFeedbackScreenPosition);
+    }
+
+    // ── Ability Bar ──
+    const FMOBAMMOAbilityDefinition ArcBurst = MOBAMMOAbilitySet::ArcBurst();
+    const FMOBAMMOAbilityDefinition Renew = MOBAMMOAbilitySet::Renew();
+    const FMOBAMMOAbilityDefinition DrainPulse = MOBAMMOAbilitySet::DrainPulse();
+    const FMOBAMMOAbilityDefinition ManaSurge = MOBAMMOAbilitySet::ManaSurge();
+    const FMOBAMMOAbilityDefinition Reforge = MOBAMMOAbilitySet::Reforge();
+
+    const TArray<FMOBAMMOAbilityDefinition> AbilityDefinitions = {
+        ArcBurst, Renew, DrainPulse, ManaSurge, Reforge
+    };
+
+    for (int32 AbilityIndex = 0; AbilityIndex < AbilityDefinitions.Num(); ++AbilityIndex)
+    {
+        const FMOBAMMOAbilityDefinition& Def = AbilityDefinitions[AbilityIndex];
+        const bool bHasCooldown = Def.Cooldown > KINDA_SMALL_NUMBER;
+        float CooldownRemaining = 0.0f;
+
+        if (Def.Name == ArcBurst.Name)        CooldownRemaining = DamageCooldownRemaining;
+        else if (Def.Name == Renew.Name)      CooldownRemaining = HealCooldownRemaining;
+        else if (Def.Name == DrainPulse.Name)  CooldownRemaining = DrainCooldownRemaining;
+        else if (Def.Name == ManaSurge.Name)   CooldownRemaining = ManaSurgeCooldownRemaining;
+
+        // Determine state
+        FString StateLabel = TEXT("READY");
+        FLinearColor StateColor = HUDColors::TextSuccess;
+        FLinearColor BarColor = HUDColors::AbilityReady;
+        FLinearColor BorderColor = FLinearColor(0.18f, 0.50f, 0.82f, 0.60f);
+        float BarPercent = 1.0f;
+
+        if (LifeState == TEXT("Dead") && Def.Kind != EMOBAMMOAbilityKind::Respawn)
+        {
+            StateLabel = TEXT("DOWN");
+            StateColor = HUDColors::TextDead;
+            BarColor = HUDColors::AbilityDead;
+            BorderColor = FLinearColor(0.24f, 0.10f, 0.10f, 0.50f);
+            BarPercent = 0.0f;
+        }
+        else if (Def.Kind == EMOBAMMOAbilityKind::Respawn && LifeState != TEXT("Dead"))
+        {
+            StateLabel = TEXT("LOCKED");
+            StateColor = HUDColors::TextSecondary;
+            BarColor = HUDColors::AbilityLocked;
+            BorderColor = FLinearColor(0.14f, 0.14f, 0.18f, 0.50f);
+            BarPercent = 0.0f;
+        }
+        else if (Def.Kind == EMOBAMMOAbilityKind::Respawn && LifeState == TEXT("Dead"))
+        {
+            BarColor = HUDColors::AbilityRespawn;
+            BorderColor = FLinearColor(0.16f, 0.64f, 0.40f, 0.70f);
+            BarPercent = RespawnBarReferenceDuration > 0.0f
+                ? FMath::Clamp(1.0f - (RespawnCooldownRemaining / RespawnBarReferenceDuration), 0.0f, 1.0f)
+                : 1.0f;
+
+            if (RespawnCooldownRemaining > KINDA_SMALL_NUMBER)
+            {
+                StateLabel = FString::Printf(TEXT("%.1fs"), RespawnCooldownRemaining);
+                StateColor = HUDColors::TextGold;
+            }
+            else
+            {
+                StateLabel = TEXT("READY");
+                StateColor = HUDColors::TextSuccess;
+            }
+        }
+        else if (Def.Name == DrainPulse.Name && !bHasTarget)
+        {
+            StateLabel = TEXT("NO TGT");
+            StateColor = HUDColors::TextSecondary;
+            BarColor = HUDColors::AbilityNoTarget;
+            BorderColor = FLinearColor(0.32f, 0.16f, 0.12f, 0.50f);
+        }
+        else if (Def.Name == DrainPulse.Name && !bTargetInRange)
+        {
+            StateLabel = TEXT("FAR");
+            StateColor = HUDColors::TextDanger;
+            BarColor = HUDColors::AbilityNoTarget;
+            BorderColor = FLinearColor(0.32f, 0.16f, 0.12f, 0.50f);
+        }
+        else if (Def.Name == ArcBurst.Name && ArcChargeRemaining > KINDA_SMALL_NUMBER)
+        {
+            StateLabel = FString::Printf(TEXT("⚡ %.1fs"), ArcChargeRemaining);
+            StateColor = HUDColors::TextCyan;
+            BarColor = HUDColors::AbilityCharged;
+            BorderColor = FLinearColor(0.30f, 0.70f, 1.00f, 0.80f);
+        }
+        else if (bHasCooldown && CooldownRemaining > KINDA_SMALL_NUMBER)
+        {
+            StateLabel = FString::Printf(TEXT("%.1fs"), CooldownRemaining);
+            StateColor = HUDColors::TextGold;
+            BarColor = HUDColors::AbilityCooldown;
+            BorderColor = FLinearColor(0.52f, 0.42f, 0.14f, 0.55f);
+            BarPercent = Def.Cooldown > 0.0f
+                ? FMath::Clamp(1.0f - (CooldownRemaining / Def.Cooldown), 0.0f, 1.0f)
+                : 1.0f;
+        }
+        else if (Def.ManaCost > 0.0f && Mana < Def.ManaCost)
+        {
+            StateLabel = TEXT("NO MP");
+            StateColor = HUDColors::TextDanger;
+            BarColor = HUDColors::AbilityNoMana;
+            BorderColor = FLinearColor(0.42f, 0.14f, 0.14f, 0.55f);
+        }
+        else
+        {
+            if (Def.Kind == EMOBAMMOAbilityKind::Damage)
+            {
+                BarColor = HUDColors::AbilityDamage;
+                BorderColor = FLinearColor(0.72f, 0.18f, 0.22f, 0.60f);
+            }
+            else if (Def.Kind == EMOBAMMOAbilityKind::Heal)
+            {
+                BarColor = HUDColors::AbilityHeal;
+                BorderColor = FLinearColor(0.16f, 0.62f, 0.38f, 0.60f);
+            }
+        }
+
+        if (AbilitySlotBorders.IsValidIndex(AbilityIndex) && AbilitySlotBorders[AbilityIndex])
+        {
+            AbilitySlotBorders[AbilityIndex]->SetBrushColor(BorderColor);
+        }
+
+        if (AbilityStateTexts.IsValidIndex(AbilityIndex) && AbilityStateTexts[AbilityIndex])
+        {
+            AbilityStateTexts[AbilityIndex]->SetText(FText::FromString(StateLabel));
+            AbilityStateTexts[AbilityIndex]->SetColorAndOpacity(FSlateColor(StateColor));
+        }
+
+        if (AbilityCooldownBars.IsValidIndex(AbilityIndex) && AbilityCooldownBars[AbilityIndex])
+        {
+            AbilityCooldownBars[AbilityIndex]->SetPercent(BarPercent);
+            AbilityCooldownBars[AbilityIndex]->SetFillColorAndOpacity(BarColor);
+        }
     }
 }
 
+// ─────────────────────────────────────────────────────────────
+// Callbacks
+// ─────────────────────────────────────────────────────────────
 void UMOBAMMOGameHUDWidget::HandleBackendStateChanged()
 {
     RefreshFromBackend();

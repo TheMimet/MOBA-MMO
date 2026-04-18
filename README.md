@@ -2,7 +2,388 @@
 
 MOBA MMORG Gaming Development
 
+## Canonical Workspace
+
+The active project root is:
+
+`C:\Users\PC\OneDrive\Desktop\MOBA MMO\MOBAMMO`
+
+Manage and launch the game from this folder only. Older sibling web-design prototype folders such as `character-flow`, `LoginAndCharacterFlowDesign`, and `NewLoginandCharacterFlowDesign` are no longer runtime dependencies. The login and character flow now live in native Unreal UI code inside this project.
+
+Use `TamBaslatma.bat` for the normal one-click local flow: database/backend, dedicated server, and staged client.
+
 ## Development Log
+
+### 2026-04-17
+
+#### AI Sparring Minion Vertical Slice
+
+This update added the first visible AI-layer combat target beside the Training Dummy so the gameplay slice can test more than a static replicated dummy state.
+
+What was added:
+
+- Added a native `AMOBAMMOTrainingMinionActor` that derives from the `MOBAMMOAI` module's `AMOBAMMOAICharacter`.
+- Gave the Sparring Minion a replicated health component path through the AI character base, a simple visible body, target ring, overhead nameplate, and floating damage feedback.
+- Added lightweight server-side patrol movement so the target is visibly alive in the arena instead of being another static object.
+- Updated GameMode to spawn the Sparring Minion on the dedicated server and route debug damage ability `1` into the minion when selected.
+- Updated PlayerController targeting so left-click can select the minion by trace, `E` can select it as a fallback target, and `6` cycles between Training Dummy and Sparring Minion when no player targets exist.
+- Updated the in-game HUD target frame to read the Sparring Minion's replicated health directly from the world actor.
+- Hardened the AI health component replication path so server-side damage/heal changes force a net update and clients receive death state transitions from replicated health.
+- Promoted `MOBAMMOAI` to a public module dependency for the main game module because the new native target class derives from AI-layer code.
+
+Validated result:
+
+- `MOBAMMOEditor Win64 Development` builds successfully.
+- Staged dedicated server cook/stage completes successfully.
+- Staged client cook/stage completes successfully.
+- The only cook warning observed is the existing `Orion_Proto_Retarget` missing `Rig` class warning.
+
+How to test in-game:
+
+- Start the local flow with `TamBaslatma.bat`.
+- Login, select/create a character, and enter the dedicated server session.
+- Press `E` to select the Sparring Minion fallback target, or aim at the minion and left-click.
+- Press `6` to cycle debug targets between Sparring Minion and Training Dummy.
+- Press `1` to cast the debug damage ability against the selected target and watch the HUD/overhead health feedback.
+
+Relevant files:
+
+- `Source/MOBAMMO/MOBAMMOTrainingMinionActor.cpp`
+- `Source/MOBAMMO/MOBAMMOTrainingMinionActor.h`
+- `Source/MOBAMMO/MOBAMMOGameMode.cpp`
+- `Source/MOBAMMO/MOBAMMOGameMode.h`
+- `Source/MOBAMMO/MOBAMMOPlayerController.cpp`
+- `Source/MOBAMMO/MOBAMMOPlayerController.h`
+- `Source/MOBAMMO/MOBAMMOGameHUDWidget.cpp`
+- `Source/MOBAMMO/MOBAMMO.Build.cs`
+- `Source/MOBAMMOAI/Private/HealthComponent.cpp`
+
+#### Sparring Minion Respawn Pass
+
+This update made the first AI target reusable during a longer playtest instead of becoming a one-time kill target.
+
+What was added:
+
+- Added a server-authoritative respawn timer for the Sparring Minion after it is killed by the debug damage ability.
+- The combat log now announces when reinforcements will arrive after the minion drops.
+- Respawn reuses the same gameplay target identity (`training-minion`), so the HUD target frame and target-cycle flow can reconnect to the newly spawned minion.
+
+Validated result:
+
+- `MOBAMMOEditor Win64 Development` builds successfully.
+- Staged dedicated server cook/stage completes successfully.
+- Staged client cook/stage completes successfully.
+- The only cook warning observed is the existing `Orion_Proto_Retarget` missing `Rig` class warning.
+
+How to test in-game:
+
+- Enter the dedicated server session.
+- Press `E` or `6` until Sparring Minion is selected.
+- Press `1` until the minion is defeated.
+- Wait roughly 5 seconds and verify the minion respawns as a selectable combat target again.
+
+Relevant files:
+
+- `Source/MOBAMMO/MOBAMMOGameMode.cpp`
+- `Source/MOBAMMO/MOBAMMOGameMode.h`
+
+#### Sparring Minion Counter-Attack Pass
+
+This update made the AI target interact back with the player so the vertical slice now has two-way combat feedback.
+
+What was added:
+
+- Added a server-authoritative counter-attack after the player damages a living Sparring Minion.
+- The counter-attack applies damage through replicated `AMOBAMMOPlayerState` health, so the player frame, roster, and incoming combat feedback can reflect the hit.
+- If the counter-attack defeats the player, the existing death and Reforge cooldown path is reused instead of adding a separate debug-only death branch.
+- Added range and damage tuning values on `AMOBAMMOGameMode` for the first minion strike pass.
+
+Validated result:
+
+- `MOBAMMOEditor Win64 Development` builds successfully.
+- Staged client cook/stage completes successfully.
+- Staged dedicated server cook/stage completes successfully.
+- The first parallel server stage attempt hit the expected UnrealBuildTool mutex because client staging was already running; rerunning server staging by itself succeeded.
+- The only cook warning observed is the existing `Orion_Proto_Retarget` missing `Rig` class warning.
+
+How to test in-game:
+
+- Enter the dedicated server session.
+- Select Sparring Minion with `E`, `6`, or left-click.
+- Press `1` to damage the minion.
+- Watch the player HP, incoming feedback, and combat log for `Minion Strike`.
+
+Relevant files:
+
+- `Source/MOBAMMO/MOBAMMOGameMode.cpp`
+- `Source/MOBAMMO/MOBAMMOGameMode.h`
+
+#### Sparring Minion Auto-Attack Pass
+
+This update added the first autonomous combat pressure from the AI layer.
+
+What was added:
+
+- Sparring Minion now starts a server-side repeating auto-attack loop when it enters the arena.
+- Every few seconds, the server finds the nearest alive player in range and applies a small replicated `Minion Pulse` hit.
+- The auto-attack loop stops when the minion dies and starts again when the minion respawns.
+- Minion strike damage uses the same replicated PlayerState health, incoming feedback, combat log, death, and Reforge cooldown path as the counter-attack.
+
+Validated result:
+
+- `MOBAMMOEditor Win64 Development` builds successfully.
+- Staged client cook/stage completes successfully.
+- Staged dedicated server cook/stage completes successfully.
+- The only cook warning observed is the existing `Orion_Proto_Retarget` missing `Rig` class warning.
+
+How to test in-game:
+
+- Enter the dedicated server session and move close to the Sparring Minion.
+- Wait roughly 3 seconds.
+- Watch player HP, incoming feedback, and combat log for `Minion Pulse`.
+- Kill the minion, wait for respawn, and verify the pulse starts again after the new minion enters the arena.
+
+Relevant files:
+
+- `Source/MOBAMMO/MOBAMMOGameMode.cpp`
+- `Source/MOBAMMO/MOBAMMOGameMode.h`
+
+#### Replicated AI Threat HUD Pass
+
+This update made the Sparring Minion's pressure easier to verify in one-client and two-client tests.
+
+What was added:
+
+- Added replicated GameState fields for the minion's latest threat target, strike name, and strike server time.
+- Updated minion strike application so `Minion Strike` and `Minion Pulse` both publish AI threat state through GameState.
+- Updated the HUD to show recent AI threat state in the selected minion target frame.
+- When no target is selected, the action hint can temporarily show the latest replicated AI threat so testers can see minion pressure without opening logs.
+
+Validated result:
+
+- `MOBAMMOEditor Win64 Development` builds successfully.
+- Staged client cook/stage completes successfully.
+- Staged dedicated server cook/stage completes successfully.
+- The only cook warning observed is the existing `Orion_Proto_Retarget` missing `Rig` class warning.
+
+How to test in-game:
+
+- Enter the dedicated server session and move close to Sparring Minion.
+- Wait for `Minion Pulse`, or attack the minion to trigger `Minion Strike`.
+- Verify HUD text briefly shows `AI Threat: StrikeName -> PlayerName`.
+- In a two-client test, verify both clients see the same recent AI threat state.
+
+Relevant files:
+
+- `Source/MOBAMMO/MOBAMMOGameState.cpp`
+- `Source/MOBAMMO/MOBAMMOGameState.h`
+- `Source/MOBAMMO/MOBAMMOGameMode.cpp`
+- `Source/MOBAMMO/MOBAMMOGameHUDWidget.cpp`
+
+#### Sparring Minion Aggro Tracking Pass
+
+This update made the Sparring Minion react visibly in the world when it damages a player, closing the loop between AI pressure, replicated HUD state, and world-space feedback.
+
+What was added:
+
+- Added a replicated aggro window to `AMOBAMMOTrainingMinionActor` after `Minion Strike` or `Minion Pulse`.
+- The minion now briefly chases the damaged player server-side before falling back to its idle patrol.
+- The minion nameplate switches to `[AGGRO] Sparring Minion` and the target ring shifts to an orange pulse while aggro is active.
+- The same GameMode strike path now publishes both replicated HUD threat state and world-space minion aggro state.
+- Updated client/server staging scripts to call UnrealBuildTool through bundled DotNet with `-NoUBA`, reducing sandbox/UBA friction during local packaging.
+
+Validated result:
+
+- `MOBAMMOEditor Win64 Development` builds successfully.
+- Staged client cook/stage completes successfully.
+- Staged dedicated server cook/stage completes successfully.
+- A short staged dedicated server smoke test starts Iris, opens port `7777`, and reports no warning/error hits for `registered SubObjectsLists`, `Ensure condition failed`, or `Error:`.
+- The only cook warning observed is the existing `Orion_Proto_Retarget` missing `Rig` class warning.
+
+How to test in-game:
+
+- Enter the dedicated server session and move close to Sparring Minion.
+- Wait for `Minion Pulse`, or attack the minion with `1` to trigger `Minion Strike`.
+- Watch the minion nameplate/ring switch into orange `[AGGRO]` state and briefly move toward the damaged player.
+- Verify the HUD still shows the replicated AI threat text while the minion reacts in the world.
+
+Relevant files:
+
+- `Source/MOBAMMO/MOBAMMOTrainingMinionActor.cpp`
+- `Source/MOBAMMO/MOBAMMOTrainingMinionActor.h`
+- `Source/MOBAMMO/MOBAMMOGameMode.cpp`
+- `Source/MOBAMMO/MOBAMMOGameMode.h`
+- `scripts/build-cook-stage-client.ps1`
+- `scripts/build-cook-stage-server.ps1`
+
+#### Iris AI Aggro HUD Observability Pass
+
+This update made the new minion aggro state easier to verify in the two-client Iris path.
+
+What was added:
+
+- Added replicated `TrainingMinionAggroEndServerTime` state to `AMOBAMMOGameState`.
+- The same minion strike path now publishes the threat target, strike name, strike server time, and aggro end time together.
+- HUD threat text now switches from passive `AI Threat` to active `AI AGGRO` while the replicated aggro window is still running.
+- The target frame and no-target action hint can show the aggro countdown, making it easier to compare both clients without opening logs.
+
+Validated result:
+
+- `MOBAMMOEditor Win64 Development` builds successfully.
+- Staged client cook/stage completes successfully.
+- Staged dedicated server cook/stage completes successfully.
+- A short staged dedicated server smoke test starts Iris, opens port `7777`, and reports no warning/error hits for `registered SubObjectsLists`, `Ensure condition failed`, or `Error:`.
+- The only cook warning observed is the existing `Orion_Proto_Retarget` missing `Rig` class warning.
+
+How to test in-game:
+
+- Run the normal flow or `scripts/run-iris-two-clients.ps1`.
+- Join both clients into the dedicated server session.
+- Move one client close enough for `Minion Pulse`, or hit the minion with `1` to trigger `Minion Strike`.
+- Verify both clients can see `AI AGGRO: StrikeName -> PlayerName (Xs)` in the HUD while the minion is reacting.
+
+Relevant files:
+
+- `Source/MOBAMMO/MOBAMMOGameState.cpp`
+- `Source/MOBAMMO/MOBAMMOGameState.h`
+- `Source/MOBAMMO/MOBAMMOGameMode.cpp`
+- `Source/MOBAMMO/MOBAMMOGameHUDWidget.cpp`
+
+#### Iris Registered Subobject Replication Pass
+
+This update tightened the native actor/component replication setup for Iris before expanding the two-client gameplay tests.
+
+What was added:
+
+- Enabled registered subobject list replication on the native playable `AMOBAMMOCharacter`.
+- Enabled registered subobject list replication on the `MOBAMMOAI` character base used by the Sparring Minion.
+- Kept Iris active in the staged launch path with `-UseIrisReplication=1` and `-net.SubObjects.DefaultUseSubObjectReplicationList=1`.
+
+Validated result:
+
+- `MOBAMMOEditor Win64 Development` builds successfully.
+- Staged dedicated server cook/stage completes successfully.
+- Staged client cook/stage completes successfully.
+- A short staged dedicated server smoke test starts Iris successfully.
+- The server smoke log reports `BroadcastLoadedModulesUpdated()` while there are `0 active ReplicationSystems`, which is the safe startup path.
+- No `registered SubObjectsLists` ensure/warning appeared in the staged server smoke log.
+- The only cook warning observed is the existing `Orion_Proto_Retarget` missing `Rig` class warning.
+
+Relevant files:
+
+- `Source/MOBAMMO/MOBAMMOCharacter.cpp`
+- `Source/MOBAMMOAI/Private/MOBAMMOAICharacter.cpp`
+- `scripts/run-staged-client.ps1`
+- `scripts/run-staged-server.ps1`
+
+#### Two-Client Iris HUD Observability Pass
+
+This update made the two-client Iris smoke test easier to read from inside the game.
+
+What was added:
+
+- Updated the top HUD roster to show each replicated player's current selected target beside health and mana.
+- Updated the two-client Iris launcher so it can prepare the backend, confirm/start the staged dedicated server, and launch both clients directly.
+- The launcher now positions both clients side-by-side and prints the exact gameplay smoke flow for roster, target, health/mana, and `AI AGGRO` countdown validation.
+
+Validated result:
+
+- `MOBAMMOEditor Win64 Development` builds successfully.
+- Staged client cook/stage completes successfully.
+- The only cook warning observed is the existing `Orion_Proto_Retarget` missing `Rig` class warning.
+- `scripts/run-iris-two-clients.ps1` parses successfully as a PowerShell script.
+
+How to test in-game:
+
+- Run `scripts/run-iris-two-clients.ps1`.
+- Login both clients and enter the dedicated server session.
+- On one client, press `E` or `6` to select Sparring Minion or Training Dummy.
+- On the other client, watch the top roster for `PlayerName HP MP -> TargetName`.
+- Press `1` on the selected target or stand close enough for `Minion Pulse`.
+- Verify HP changes remain visible through the target frame/roster, and both clients can see the replicated `AI AGGRO` countdown when the minion reacts.
+
+Relevant files:
+
+- `Source/MOBAMMO/MOBAMMOGameHUDWidget.cpp`
+- `scripts/run-iris-two-clients.ps1`
+
+#### Training Target Visibility and Interaction Pass
+
+This update focused on making the first in-game combat target easier to see, select, and test after entering the dedicated server session.
+
+What was added:
+
+- Moved the spawned Training Dummy to a clearer side-forward position so it is less likely to be hidden by the player character or the center wall marker.
+- Added a world-space target ring and overhead beacon to the Training Dummy actor, making the target visually recognizable in the arena.
+- Raised the Training Dummy nameplate and floating feedback text so health, mana, and damage/heal feedback are easier to read in third-person view.
+- Split left-click and `E` target selection behavior: left-click still selects the viewed target, while `E` now falls back to selecting the Training Dummy if the center trace misses.
+- Added combat log feedback when selecting another player, selecting the Training Dummy, or clearing the current target.
+- Preloaded the late Development runtime modules (`AutomationWorker`, `AutomationController`, `PerfCounters`) from the project GameInstance so Iris no longer receives a module-list update after the replication system is active.
+- Detached the old external `character-flow` web UI prototype launcher from the active runtime and redirected the legacy `baslat.bat` entry point to the canonical `TamBaslatma.bat` launcher.
+
+Validated result:
+
+- `MOBAMMOEditor Win64 Development` builds successfully.
+- Staged dedicated server cook/stage completes successfully.
+- Staged client cook/stage completes successfully.
+- Staged dedicated server runtime starts with Iris enabled and no longer emits the tick-1 `BroadcastLoadedModulesUpdated()` warning.
+- The only cook warning observed is the existing `Orion_Proto_Retarget` missing `Rig` class warning.
+
+Relevant files:
+
+- `Source/MOBAMMO/MOBAMMOGameInstance.cpp`
+- `Source/MOBAMMO/MOBAMMOGameMode.h`
+- `Source/MOBAMMO/MOBAMMOPlayerController.cpp`
+- `Source/MOBAMMO/MOBAMMOPlayerController.h`
+- `Source/MOBAMMO/MOBAMMOTrainingDummyActor.cpp`
+- `Source/MOBAMMO/MOBAMMOTrainingDummyActor.h`
+
+### 2026-04-16
+
+#### Playable Vertical Slice Stabilization
+
+This update focused on turning the login and character selection flow into a playable gameplay slice after joining the dedicated server.
+
+What was added:
+
+- Switched the server GameMode default pawn to the native `AMOBAMMOCharacter` so movement, camera, ability component, and replication are no longer dependent on a Blueprint parent setup.
+- Added a native spring-arm follow camera and Aurora mesh/animation bootstrap to `AMOBAMMOCharacter`.
+- Added guaranteed legacy input mappings for WASD, mouse look, jump, and `Ability1`-`Ability6` in `DefaultInput.ini`.
+- Added a replicated Training Dummy state to `AMOBAMMOGameState` for single-client target, damage, mana drain, and HUD testing.
+- Added a replicated world-space Training Dummy actor so the target is visible in the map, with a nameplate mirroring health and mana.
+- Added look-at interaction for the Training Dummy: aim at it and press left mouse or `E` to select it without using the debug target cycle.
+- Updated target cycling so pressing `6` selects the Training Dummy when no other player target exists.
+- Updated debug ability flow so `1` and `3` can mutate Training Dummy health/mana through server-owned GameMode logic.
+- Updated the HUD target frame to show Training Dummy health and mana from replicated GameState data.
+- Updated the Training Dummy nameplate to show `[TARGET]` with a selected color when the local player has it targeted.
+- Added world-space floating feedback on the Training Dummy for replicated HP/MP changes, plus camera-facing nameplate text for easier in-game testing.
+- Added an Iris roster readout to the HUD score bar so two-client tests can see replicated player HP/MP state at a glance.
+- Added `scripts/run-iris-two-clients.ps1` for launching a two-client local Iris replication smoke test.
+- Cleaned up the ability component lifecycle so Unreal initializes the replicated component once, avoiding manual `InitializeComponent` calls from the character.
+- Hardened the staged client launcher so it validates the MOBAMMO backend on `127.0.0.1:3000` and detects the dedicated server by process instead of probing the Unreal UDP game port as TCP.
+
+Validated result:
+
+- `MOBAMMOEditor Win64 Development` builds successfully after the playable pawn, input, HUD, Training Dummy, and world feedback changes.
+- Staged dedicated server and staged client cook/stage both complete successfully with the playable vertical slice.
+
+Relevant files:
+
+- `Config/DefaultInput.ini`
+- `Source/MOBAMMOAbilities/Private/AbilityComponent.cpp`
+- `Source/MOBAMMO/MOBAMMOCharacter.cpp`
+- `Source/MOBAMMO/MOBAMMOCharacter.h`
+- `Source/MOBAMMO/MOBAMMOGameMode.cpp`
+- `Source/MOBAMMO/MOBAMMOGameMode.h`
+- `Source/MOBAMMO/MOBAMMOGameState.cpp`
+- `Source/MOBAMMO/MOBAMMOGameState.h`
+- `Source/MOBAMMO/MOBAMMOGameHUDWidget.cpp`
+- `Source/MOBAMMO/MOBAMMOPlayerController.cpp`
+- `Source/MOBAMMO/MOBAMMOPlayerController.h`
+- `Source/MOBAMMO/MOBAMMOTrainingDummyActor.cpp`
+- `Source/MOBAMMO/MOBAMMOTrainingDummyActor.h`
+- `scripts/run-iris-two-clients.ps1`
+- `scripts/run-staged-client.ps1`
 
 ### 2026-04-13
 

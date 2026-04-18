@@ -3,7 +3,7 @@ $ErrorActionPreference = "Stop"
 $projectRoot = Split-Path -Parent $PSScriptRoot
 $serverExe = Join-Path $projectRoot "Binaries\Win64\MOBAMMOServer.exe"
 $projectFile = Join-Path $projectRoot "MOBAMMO.uproject"
-$defaultMap = "/Game/ThirdPerson/Lvl_ThirdPerson"
+$defaultMap = "/Game/ThirdPerson/Lvl_ThirdPerson?game=/Script/MOBAMMO.MOBAMMOGameMode"
 
 if (-not (Test-Path $serverExe)) {
   throw "Dedicated server executable not found: $serverExe"

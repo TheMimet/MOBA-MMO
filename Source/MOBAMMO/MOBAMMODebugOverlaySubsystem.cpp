@@ -7,8 +7,8 @@
 #include "Blueprint/UserWidget.h"
 #include "Misc/CommandLine.h"
 #include "Misc/Parse.h"
-#include "MOBAMMOCharacterFlowWidget.h"
 #include "MOBAMMODebugLoginWidget.h"
+#include "MOBAMMOCharacterSelectWidget.h"
 #include "UObject/SoftObjectPath.h"
 
 void UMOBAMMODebugOverlaySubsystem::Initialize(FSubsystemCollectionBase& Collection)
@@ -82,8 +82,6 @@ bool UMOBAMMODebugOverlaySubsystem::Tick(float DeltaTime)
         return true;
     }
 
-    EnsureCharacterFlowWidget(PlayerController);
-
     if (ShouldShowDebugPanel())
     {
         const TSubclassOf<UMOBAMMODebugLoginWidget> DebugWidgetClass = ResolveDebugWidgetClass();
@@ -137,62 +135,12 @@ TSubclassOf<UMOBAMMODebugLoginWidget> UMOBAMMODebugOverlaySubsystem::ResolveDebu
     return UMOBAMMODebugLoginWidget::StaticClass();
 }
 
-TSubclassOf<UMOBAMMOCharacterFlowWidget> UMOBAMMODebugOverlaySubsystem::ResolveCharacterFlowWidgetClass() const
+TSubclassOf<UMOBAMMOCharacterSelectWidget> UMOBAMMODebugOverlaySubsystem::ResolveCharacterFlowWidgetClass() const
 {
-    const FSoftClassPath BlueprintWidgetClassPath(TEXT("/Game/WBP_CharacterFlow.WBP_CharacterFlow_C"));
-    if (UClass* LoadedClass = BlueprintWidgetClassPath.TryLoadClass<UMOBAMMOCharacterFlowWidget>())
-    {
-        return LoadedClass;
-    }
-
-    return UMOBAMMOCharacterFlowWidget::StaticClass();
+    return nullptr;
 }
 
 bool UMOBAMMODebugOverlaySubsystem::EnsureCharacterFlowWidget(APlayerController* PlayerController)
 {
-    if (!PlayerController)
-    {
-        return false;
-    }
-
-    if (!CharacterFlowWidget)
-    {
-        CharacterFlowWidget = CreateWidget<UMOBAMMOCharacterFlowWidget>(PlayerController, ResolveCharacterFlowWidgetClass());
-        if (CharacterFlowWidget)
-        {
-            CharacterFlowWidget->AddToViewport(9000);
-        }
-    }
-
-    if (!CharacterFlowWidget)
-    {
-        return false;
-    }
-
-    CharacterFlowWidget->RefreshFromBackend();
-
-    const bool bShouldBeVisible = CharacterFlowWidget->ShouldBeVisible();
-    CharacterFlowWidget->SetVisibility(bShouldBeVisible ? ESlateVisibility::Visible : ESlateVisibility::Collapsed);
-    if (DebugWidget)
-    {
-        DebugWidget->SetVisibility(bShouldBeVisible ? ESlateVisibility::Collapsed : ESlateVisibility::Visible);
-    }
-
-    if (bShouldBeVisible && !bCharacterFlowInputApplied)
-    {
-        PlayerController->SetShowMouseCursor(true);
-        FInputModeGameAndUI InputMode;
-        InputMode.SetHideCursorDuringCapture(false);
-        PlayerController->SetInputMode(InputMode);
-        bCharacterFlowInputApplied = true;
-    }
-    else if (!bShouldBeVisible && bCharacterFlowInputApplied)
-    {
-        PlayerController->SetShowMouseCursor(false);
-        FInputModeGameOnly InputMode;
-        PlayerController->SetInputMode(InputMode);
-        bCharacterFlowInputApplied = false;
-    }
-
-    return true;
+    return false;
 }

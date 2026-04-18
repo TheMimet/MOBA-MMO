@@ -14,11 +14,22 @@ public class MOBAMMO : ModuleRules
                 "Engine",
                 "InputCore",
                 "EnhancedInput",
+                "Slate",
+                "SlateCore",
                 "UMG",
-                "WebBrowserWidget",
                 "HTTP",
                 "Json",
-                "JsonUtilities"
+                "JsonUtilities",
+                "GameplayTags",
+                "GameplayTasks",
+                "MOBAMMOAI"
+            }
+        );
+
+        PrivateDependencyModuleNames.AddRange(
+            new[]
+            {
+                "MOBAMMOAbilities"
             }
         );
     }

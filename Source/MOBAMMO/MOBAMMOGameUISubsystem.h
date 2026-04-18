@@ -5,7 +5,7 @@
 
 #include "MOBAMMOGameUISubsystem.generated.h"
 
-class UMOBAMMOCharacterFlowWidget;
+class UMOBAMMOCharacterSelectWidget;
 class UMOBAMMOGameHUDWidget;
 class UMOBAMMOLoginScreenWidget;
 class UMOBAMMOLoadingScreenWidget;
@@ -29,6 +29,7 @@ private:
     TSubclassOf<UMOBAMMOLoginScreenWidget> ResolveLoginWidgetClass() const;
     TSubclassOf<UMOBAMMOLoadingScreenWidget> ResolveLoadingWidgetClass() const;
     TSubclassOf<UMOBAMMOGameHUDWidget> ResolveHUDWidgetClass() const;
+    TSubclassOf<UMOBAMMOCharacterSelectWidget> ResolveCharacterSelectWidgetClass() const;
 
     FTSTicker::FDelegateHandle TickHandle;
 
@@ -37,6 +38,9 @@ private:
 
     UPROPERTY(Transient)
     TObjectPtr<UMOBAMMOLoadingScreenWidget> LoadingWidget;
+    
+    UPROPERTY(Transient)
+    TObjectPtr<UMOBAMMOCharacterSelectWidget> CharacterSelectWidget;
 
     UPROPERTY(Transient)
     TObjectPtr<UMOBAMMOGameHUDWidget> HUDWidget;

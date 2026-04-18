@@ -1,16 +1,34 @@
 @echo off
-echo MOBA MMO Projesi Baslatiliyor...
+setlocal
+title MOBA MMO - Canonical Launcher
 
-echo Veritabani kontrol ediliyor ve baslatiliyor...
-cd server
-call npm run db:start
+set "PROJECT_ROOT=%~dp0"
+set "CANONICAL_LAUNCHER=%PROJECT_ROOT%TamBaslatma.bat"
 
-echo Backend sunucusu yeni pencerede baslatiliyor...
-start "MOBA MMO Backend" cmd /k "npm run dev"
+if /I "%~1"=="/?" goto :help
+if /I "%~1"=="-h" goto :help
+if /I "%~1"=="--help" goto :help
 
-cd ..
+if not exist "%CANONICAL_LAUNCHER%" (
+  echo HATA: Kanonik baslatma dosyasi bulunamadi:
+  echo %CANONICAL_LAUNCHER%
+  pause
+  exit /b 1
+)
 
-echo Unreal Engine Editor baslatiliyor...
-start MOBAMMO.uproject
+echo Bu proje artik tek kanonik akistan yonetiliyor:
+echo %CANONICAL_LAUNCHER%
+echo.
+call "%CANONICAL_LAUNCHER%"
+endlocal
+exit /b %ERRORLEVEL%
 
-echo Baslatma islemi tamamlandi.
+:help
+echo MOBA MMO kanonik launcher.
+echo.
+echo Normal kullanim:
+echo   baslat.bat
+echo.
+echo Bu komut TamBaslatma.bat dosyasina yonlenir ve lokal DB/backend, dedicated server ve staged client akisini baslatir.
+endlocal
+exit /b 0

@@ -34,9 +34,6 @@ protected:
 private:
     void BuildLayout();
     void BindToSubsystem(UMOBAMMOBackendSubsystem* BackendSubsystem);
-    void DispatchStateToBrowser();
-    FString BuildStateJson() const;
-    void HandleBrowserAction(const TSharedPtr<FJsonObject>& ActionObject);
 
     UFUNCTION()
     void HandleBackendStateChanged();
@@ -47,13 +44,20 @@ private:
     UFUNCTION()
     void HandleLoginFailed(const FString& ErrorMessage);
 
-    UPROPERTY(Transient)
-    TObjectPtr<UWebBrowser> Browser;
-
     UFUNCTION()
-    void HandleBrowserConsoleMessage(const FString& Message, const FString& Source, int32 Line);
+    void HandleLoginButtonClicked();
 
-    FString LastPushedStateJson;
+    UPROPERTY(Transient)
+    class UBorder* RootBorder;
+
+    UPROPERTY(Transient)
+    class UEditableTextBox* UsernameInput;
+
+    UPROPERTY(Transient)
+    class UButton* LoginButton;
+
+    UPROPERTY(Transient)
+    class UTextBlock* ErrorText;
 
     bool bBoundToSubsystem = false;
 };

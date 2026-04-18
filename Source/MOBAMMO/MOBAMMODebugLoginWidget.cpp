@@ -315,6 +315,17 @@ void UMOBAMMODebugLoginWidget::BindToSubsystem(UMOBAMMOBackendSubsystem* Backend
 
 void UMOBAMMODebugLoginWidget::RefreshDisplay()
 {
+    const bool bIsClient = GetWorld() && GetWorld()->GetNetMode() == NM_Client;
+    if (RootBorder)
+    {
+        RootBorder->SetVisibility(bIsClient ? ESlateVisibility::Collapsed : ESlateVisibility::SelfHitTestInvisible);
+    }
+    
+    if (bIsClient)
+    {
+        return;
+    }
+
     if (BackendUrlText)
     {
         BackendUrlText->SetText(FText::FromString(FString::Printf(TEXT("Backend URL: %s"), *GetBackendUrl())));
