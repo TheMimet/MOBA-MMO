@@ -19,7 +19,13 @@ public:
     FMOBAMMOPlayerStateUpdatedSignature OnReplicatedStateUpdated;
 
     UFUNCTION(BlueprintCallable, Category="MOBAMMO|Replication")
-    void ApplySessionIdentity(const FString& InAccountId, const FString& InCharacterId, const FString& InCharacterName, const FString& InClassId, int32 InLevel);
+    void ApplySessionIdentity(const FString& InAccountId, const FString& InCharacterId, const FString& InSessionId, const FString& InCharacterName, const FString& InClassId, int32 InLevel);
+
+    UFUNCTION(BlueprintCallable, Category="MOBAMMO|Replication")
+    void ApplyPersistentCharacterState(int32 InExperience, const FVector& InSavedWorldPosition, float InCurrentHealth, float InMaxHealth, float InCurrentMana, float InMaxMana, int32 InKillCount, int32 InDeathCount);
+
+    UFUNCTION(BlueprintCallable, Category="MOBAMMO|Replication")
+    void ApplyAppearanceSelection(int32 InPresetId, int32 InColorIndex, int32 InShade, int32 InTransparent, int32 InTextureDetail);
 
     UFUNCTION(BlueprintCallable, Category="MOBAMMO|Replication")
     void InitializeAttributes(float InMaxHealth, float InMaxMana);
@@ -52,6 +58,18 @@ public:
     FString GetCharacterId() const { return CharacterId; }
 
     UFUNCTION(BlueprintPure, Category="MOBAMMO|Replication")
+    FString GetSessionId() const { return SessionId; }
+
+    UFUNCTION(BlueprintCallable, Category="MOBAMMO|Replication")
+    void SetPersistenceStatus(const FString& InStatus, const FString& InErrorMessage);
+
+    UFUNCTION(BlueprintPure, Category="MOBAMMO|Replication")
+    FString GetPersistenceStatus() const { return PersistenceStatus; }
+
+    UFUNCTION(BlueprintPure, Category="MOBAMMO|Replication")
+    FString GetPersistenceErrorMessage() const { return PersistenceErrorMessage; }
+
+    UFUNCTION(BlueprintPure, Category="MOBAMMO|Replication")
     FString GetCharacterName() const { return CharacterName; }
 
     UFUNCTION(BlueprintPure, Category="MOBAMMO|Replication")
@@ -59,6 +77,18 @@ public:
 
     UFUNCTION(BlueprintPure, Category="MOBAMMO|Replication")
     int32 GetCharacterLevel() const { return CharacterLevel; }
+
+    UFUNCTION(BlueprintPure, Category="MOBAMMO|Replication")
+    int32 GetCharacterExperience() const { return CharacterExperience; }
+
+    UFUNCTION(BlueprintPure, Category="MOBAMMO|Replication")
+    FVector GetSavedWorldPosition() const { return SavedWorldPosition; }
+
+    UFUNCTION(BlueprintPure, Category="MOBAMMO|Replication")
+    bool HasPersistentCharacterSnapshot() const { return bHasPersistentCharacterSnapshot; }
+
+    bool HasConsumedPersistentSpawnLocation() const { return bPersistentSpawnLocationConsumed; }
+    void MarkPersistentSpawnLocationConsumed() { bPersistentSpawnLocationConsumed = true; }
 
     UFUNCTION(BlueprintPure, Category="MOBAMMO|Replication")
     float GetCurrentHealth() const { return CurrentHealth; }
@@ -190,6 +220,15 @@ protected:
     FString CharacterId;
 
     UPROPERTY(ReplicatedUsing=OnRep_PlayerIdentity, BlueprintReadOnly, Category="MOBAMMO|Replication")
+    FString SessionId;
+
+    UPROPERTY(ReplicatedUsing=OnRep_PersistenceStatus, BlueprintReadOnly, Category="MOBAMMO|Replication")
+    FString PersistenceStatus = TEXT("Ready");
+
+    UPROPERTY(ReplicatedUsing=OnRep_PersistenceStatus, BlueprintReadOnly, Category="MOBAMMO|Replication")
+    FString PersistenceErrorMessage;
+
+    UPROPERTY(ReplicatedUsing=OnRep_PlayerIdentity, BlueprintReadOnly, Category="MOBAMMO|Replication")
     FString CharacterName;
 
     UPROPERTY(ReplicatedUsing=OnRep_PlayerIdentity, BlueprintReadOnly, Category="MOBAMMO|Replication")
@@ -197,6 +236,32 @@ protected:
 
     UPROPERTY(ReplicatedUsing=OnRep_PlayerIdentity, BlueprintReadOnly, Category="MOBAMMO|Replication")
     int32 CharacterLevel = 1;
+
+    UPROPERTY(ReplicatedUsing=OnRep_PlayerIdentity, BlueprintReadOnly, Category="MOBAMMO|Replication")
+    int32 CharacterExperience = 0;
+
+    UPROPERTY(ReplicatedUsing=OnRep_PlayerIdentity, BlueprintReadOnly, Category="MOBAMMO|Replication")
+    FVector SavedWorldPosition = FVector::ZeroVector;
+
+    UPROPERTY(ReplicatedUsing=OnRep_PlayerIdentity, BlueprintReadOnly, Category="MOBAMMO|Replication")
+    int32 PresetId = 4;
+
+    UPROPERTY(ReplicatedUsing=OnRep_PlayerIdentity, BlueprintReadOnly, Category="MOBAMMO|Replication")
+    int32 ColorIndex = 0;
+
+    UPROPERTY(ReplicatedUsing=OnRep_PlayerIdentity, BlueprintReadOnly, Category="MOBAMMO|Replication")
+    int32 Shade = 58;
+
+    UPROPERTY(ReplicatedUsing=OnRep_PlayerIdentity, BlueprintReadOnly, Category="MOBAMMO|Replication")
+    int32 Transparent = 18;
+
+    UPROPERTY(ReplicatedUsing=OnRep_PlayerIdentity, BlueprintReadOnly, Category="MOBAMMO|Replication")
+    int32 TextureDetail = 88;
+
+    UPROPERTY(ReplicatedUsing=OnRep_PlayerIdentity, BlueprintReadOnly, Category="MOBAMMO|Replication")
+    bool bHasPersistentCharacterSnapshot = false;
+
+    bool bPersistentSpawnLocationConsumed = false;
 
     UPROPERTY(ReplicatedUsing=OnRep_Attributes, BlueprintReadOnly, Category="MOBAMMO|Replication")
     float CurrentHealth = 100.0f;
@@ -252,6 +317,9 @@ protected:
 private:
     UFUNCTION()
     void OnRep_PlayerIdentity();
+
+    UFUNCTION()
+    void OnRep_PersistenceStatus();
 
     UFUNCTION()
     void OnRep_Attributes();

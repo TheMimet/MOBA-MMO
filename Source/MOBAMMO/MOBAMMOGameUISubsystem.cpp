@@ -5,6 +5,8 @@
 #include "Engine/LocalPlayer.h"
 #include "Engine/World.h"
 #include "GameFramework/PlayerController.h"
+#include "Misc/CommandLine.h"
+#include "Misc/Parse.h"
 #include "MOBAMMOBackendSubsystem.h"
 #include "MOBAMMOGameHUDWidget.h"
 #include "MOBAMMOLoginScreenWidget.h"
@@ -91,6 +93,7 @@ bool UMOBAMMOGameUISubsystem::Tick(float DeltaTime)
     }
 
     EnsureWidgets(PlayerController);
+    ReconcileCommandLineAutoSession();
     ReconcileSessionState(PlayerController);
     UpdateWidgetVisibility(PlayerController);
     return true;
@@ -201,6 +204,65 @@ void UMOBAMMOGameUISubsystem::ReconcileSessionState(APlayerController* PlayerCon
     }
 
     BackendSubsystem->NotifyClientEnteredSessionWorld();
+}
+
+void UMOBAMMOGameUISubsystem::ReconcileCommandLineAutoSession()
+{
+    if (!FParse::Param(FCommandLine::Get(), TEXT("MOBAMMOAutoSession")))
+    {
+        return;
+    }
+
+    UGameInstance* GameInstance = GetGameInstance();
+    UMOBAMMOBackendSubsystem* BackendSubsystem = GameInstance ? GameInstance->GetSubsystem<UMOBAMMOBackendSubsystem>() : nullptr;
+    if (!BackendSubsystem)
+    {
+        return;
+    }
+
+    UWorld* World = GameInstance->GetWorld();
+    if (!World || World->GetNetMode() == NM_Client)
+    {
+        return;
+    }
+
+    FString AutoUsername = TEXT("mimet_bp_test");
+    FParse::Value(FCommandLine::Get(), TEXT("MOBAMMOAutoUser="), AutoUsername);
+
+    FString AutoCharacterName = TEXT("BPHero");
+    FParse::Value(FCommandLine::Get(), TEXT("MOBAMMOAutoCharacter="), AutoCharacterName);
+
+    if (!bAutoSessionLoginRequested && BackendSubsystem->GetLoginStatus() == TEXT("Idle"))
+    {
+        bAutoSessionLoginRequested = true;
+        BackendSubsystem->MockLogin(AutoUsername);
+        return;
+    }
+
+    if (bAutoSessionStartRequested || BackendSubsystem->GetCharacterListStatus() != TEXT("Loaded"))
+    {
+        return;
+    }
+
+    const TArray<FBackendCharacterResult> Characters = BackendSubsystem->GetCachedCharacters();
+    const FBackendCharacterResult* SelectedCharacter = Characters.FindByPredicate([&AutoCharacterName](const FBackendCharacterResult& Character)
+    {
+        return Character.Name.Equals(AutoCharacterName, ESearchCase::IgnoreCase);
+    });
+
+    if (!SelectedCharacter && Characters.Num() > 0)
+    {
+        SelectedCharacter = &Characters[0];
+    }
+
+    if (!SelectedCharacter)
+    {
+        return;
+    }
+
+    bAutoSessionStartRequested = true;
+    BackendSubsystem->SelectCharacter(SelectedCharacter->CharacterId);
+    BackendSubsystem->StartSessionForSelectedCharacter();
 }
 
 void UMOBAMMOGameUISubsystem::UpdateWidgetVisibility(APlayerController* PlayerController)

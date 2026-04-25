@@ -12,6 +12,8 @@ Manage and launch the game from this folder only. Older sibling web-design proto
 
 Use `TamBaslatma.bat` for the normal one-click local flow: database/backend, dedicated server, and staged client.
 
+Persistence/session operations are documented in `docs/persistence-operations.md`.
+
 ## Development Log
 
 ### 2026-04-17

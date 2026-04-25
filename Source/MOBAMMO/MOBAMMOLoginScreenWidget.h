@@ -21,6 +21,9 @@ public:
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Login")
     FString DefaultUsername = TEXT("mimet_bp_test");
 
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Login")
+    FString WebUIBaseUrl = TEXT("http://127.0.0.1:3002");
+
     UFUNCTION(BlueprintCallable, Category="Login")
     void RefreshFromBackend();
 
@@ -34,6 +37,9 @@ protected:
 private:
     void BuildLayout();
     void BindToSubsystem(UMOBAMMOBackendSubsystem* BackendSubsystem);
+    void PushStateToWebUI();
+    UFUNCTION()
+    void HandleConsoleMessage(const FString& Message, const FString& Source, int32 Line);
 
     UFUNCTION()
     void HandleBackendStateChanged();
@@ -44,20 +50,9 @@ private:
     UFUNCTION()
     void HandleLoginFailed(const FString& ErrorMessage);
 
-    UFUNCTION()
-    void HandleLoginButtonClicked();
-
     UPROPERTY(Transient)
-    class UBorder* RootBorder;
-
-    UPROPERTY(Transient)
-    class UEditableTextBox* UsernameInput;
-
-    UPROPERTY(Transient)
-    class UButton* LoginButton;
-
-    UPROPERTY(Transient)
-    class UTextBlock* ErrorText;
+    UWebBrowser* WebBrowserWidget;
 
     bool bBoundToSubsystem = false;
+    bool bPageLoaded = false;
 };

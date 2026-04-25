@@ -673,6 +673,26 @@ void UMOBAMMOGameHUDWidget::BuildScoreBar(UCanvasPanel* Canvas)
     {
         RosterSlot->SetVerticalAlignment(VAlign_Center);
     }
+
+    UTextBlock* SaveSep = WidgetTree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass());
+    SaveSep->SetColorAndOpacity(FSlateColor(HUDColors::TextSecondary));
+    FSlateFontInfo SaveSepFont = SaveSep->GetFont();
+    SaveSepFont.Size = 12;
+    SaveSep->SetFont(SaveSepFont);
+    SaveSep->SetText(FText::FromString(TEXT("  |  ")));
+    ScoreRow->AddChildToHorizontalBox(SaveSep);
+
+    SaveConnectionText = WidgetTree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass());
+    SaveConnectionText->SetColorAndOpacity(FSlateColor(HUDColors::TextSecondary));
+    FSlateFontInfo SaveFont = SaveConnectionText->GetFont();
+    SaveFont.Size = 11;
+    SaveFont.TypefaceFontName = TEXT("Bold");
+    SaveConnectionText->SetFont(SaveFont);
+    SaveConnectionText->SetToolTipText(FText::FromString(TEXT("Backend save/session connection state")));
+    if (UHorizontalBoxSlot* SaveSlot = ScoreRow->AddChildToHorizontalBox(SaveConnectionText))
+    {
+        SaveSlot->SetVerticalAlignment(VAlign_Center);
+    }
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -847,6 +867,16 @@ void UMOBAMMOGameHUDWidget::UpdateTexts()
     FString TargetName;
     FString TargetClass;
     int32 TargetLevel = 1;
+    FString SaveStatus = TEXT("Idle");
+    FString SaveErrorMessage;
+    bool bSaveConnectionHealthy = true;
+
+    if (const UMOBAMMOBackendSubsystem* BackendSubsystem = GetBackendSubsystem())
+    {
+        SaveStatus = BackendSubsystem->GetSaveStatus();
+        SaveErrorMessage = BackendSubsystem->GetLastSaveErrorMessage();
+        bSaveConnectionHealthy = BackendSubsystem->IsSaveConnectionHealthy();
+    }
 
     if (const UWorld* World = GetWorld())
     {
@@ -879,6 +909,14 @@ void UMOBAMMOGameHUDWidget::UpdateTexts()
             DeathCount = PlayerState->GetDeaths();
             LifeState = PlayerState->IsAlive() ? TEXT("Alive") : TEXT("Dead");
             SelectedTargetCharacterId = PlayerState->GetSelectedTargetCharacterId();
+
+            const FString ReplicatedSaveStatus = PlayerState->GetPersistenceStatus();
+            if (!ReplicatedSaveStatus.IsEmpty())
+            {
+                SaveStatus = ReplicatedSaveStatus;
+                SaveErrorMessage = PlayerState->GetPersistenceErrorMessage();
+                bSaveConnectionHealthy = SaveStatus != TEXT("Failed") && SaveStatus != TEXT("SessionInvalid");
+            }
         }
     }
 
@@ -1136,6 +1174,37 @@ void UMOBAMMOGameHUDWidget::UpdateTexts()
     if (RosterText)
     {
         RosterText->SetText(FText::FromString(RosterDisplay));
+    }
+
+    if (SaveConnectionText)
+    {
+        FString SaveDisplay = TEXT("SAVE IDLE");
+        FLinearColor SaveColor = HUDColors::TextSecondary;
+
+        if (SaveStatus == TEXT("Saving"))
+        {
+            SaveDisplay = TEXT("SAVING");
+            SaveColor = HUDColors::TextGold;
+        }
+        else if (SaveStatus == TEXT("Saved") || SaveStatus == TEXT("Ready"))
+        {
+            SaveDisplay = TEXT("SAVE OK");
+            SaveColor = HUDColors::TextSuccess;
+        }
+        else if (SaveStatus == TEXT("Reconnecting"))
+        {
+            SaveDisplay = TEXT("RECONNECTING");
+            SaveColor = HUDColors::TextGold;
+        }
+        else if (!bSaveConnectionHealthy || SaveStatus == TEXT("Failed") || SaveStatus == TEXT("SessionInvalid"))
+        {
+            SaveDisplay = SaveStatus == TEXT("SessionInvalid") ? TEXT("RECONNECT [R]") : TEXT("SAVE ISSUE");
+            SaveColor = HUDColors::TextDanger;
+        }
+
+        SaveConnectionText->SetText(FText::FromString(SaveDisplay));
+        SaveConnectionText->SetColorAndOpacity(FSlateColor(SaveColor));
+        SaveConnectionText->SetToolTipText(FText::FromString(SaveErrorMessage.IsEmpty() ? TEXT("Backend save connection healthy.") : SaveErrorMessage));
     }
 
     // ── Target Frame ──

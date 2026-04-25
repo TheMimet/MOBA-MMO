@@ -5,6 +5,7 @@
 #include "InputCoreTypes.h"
 #include "MOBAMMOGameMode.h"
 #include "MOBAMMOGameState.h"
+#include "MOBAMMOBackendSubsystem.h"
 #include "MOBAMMOPlayerState.h"
 #include "MOBAMMOTrainingDummyActor.h"
 #include "MOBAMMOTrainingMinionActor.h"
@@ -63,6 +64,26 @@ void AMOBAMMOPlayerController::PlayerTick(float DeltaTime)
 	if (WasInputKeyJustPressed(EKeys::Seven))
 	{
 		TriggerClearDebugTarget();
+	}
+	if (WasInputKeyJustPressed(EKeys::R))
+	{
+		if (UGameInstance* GameInstance = GetGameInstance())
+		{
+			if (UMOBAMMOBackendSubsystem* BackendSubsystem = GameInstance->GetSubsystem<UMOBAMMOBackendSubsystem>())
+			{
+				const AMOBAMMOPlayerState* MOBAPlayerState = GetPlayerState<AMOBAMMOPlayerState>();
+				const bool bReplicatedSessionInvalid = MOBAPlayerState && MOBAPlayerState->GetPersistenceStatus() == TEXT("SessionInvalid");
+				const bool bCanReconnect = BackendSubsystem->GetSessionStatus() == TEXT("ReconnectRequired") || bReplicatedSessionInvalid;
+				UE_LOG(LogTemp, Log, TEXT("[Backend] Reconnect key pressed. SessionStatus=%s PersistenceStatus=%s CanReconnect=%s"),
+					*BackendSubsystem->GetSessionStatus(),
+					MOBAPlayerState ? *MOBAPlayerState->GetPersistenceStatus() : TEXT("<no player state>"),
+					bCanReconnect ? TEXT("true") : TEXT("false"));
+				if (bCanReconnect)
+				{
+					BackendSubsystem->ReconnectCurrentSession(this);
+				}
+			}
+		}
 	}
 }
 

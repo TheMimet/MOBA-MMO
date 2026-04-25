@@ -6,6 +6,7 @@ $gameExe = Join-Path $stageRoot "MOBAMMO\Binaries\Win64\MOBAMMO.exe"
 $serverScript = Join-Path $PSScriptRoot "run-staged-server.ps1"
 $backendRoot = Join-Path $projectRoot "server"
 $backendDbScript = Join-Path $backendRoot "scripts\start-local-db.ps1"
+$webUiRoot = Join-Path (Split-Path -Parent $projectRoot) "LoginAndCharacterFlowDesign"
 
 if (-not (Test-Path $gameExe)) {
   throw "Staged game executable not found: $gameExe"
@@ -121,6 +122,24 @@ if (-not (Test-StagedServerProcess)) {
   }
 }
 
+# Start WebUI dev server if not already running on port 3002
+if (-not (Test-PortListening -HostName "127.0.0.1" -Port 3002)) {
+  if (Test-Path $webUiRoot) {
+    Write-Output "Starting WebUI dev server on port 3002..."
+    Start-Process powershell -ArgumentList @(
+      "-NoExit",
+      "-ExecutionPolicy", "Bypass",
+      "-Command",
+      "Set-Location '$webUiRoot'; npm run dev -- --port 3002"
+    ) -WorkingDirectory $webUiRoot
+
+    if (-not (Wait-ForPort -HostName "127.0.0.1" -Port 3002 -TimeoutSeconds 20)) {
+      Write-Warning "WebUI dev server did not start on port 3002 within the wait window. Login screen may show a blank page."
+    }
+  } else {
+    Write-Warning "WebUI project not found at $webUiRoot. Login screen will use fallback UI."
+  }
+}
 
 Start-Process -FilePath $gameExe -ArgumentList @(
   "/Game/ThirdPerson/Lvl_ThirdPerson?game=/Script/MOBAMMO.MOBAMMOGameMode",
@@ -129,5 +148,8 @@ Start-Process -FilePath $gameExe -ArgumentList @(
   "-ResX=1280",
   "-ResY=720",
   "-UseIrisReplication=1",
-  "-net.SubObjects.DefaultUseSubObjectReplicationList=1"
+  "-net.SubObjects.DefaultUseSubObjectReplicationList=1",
+  "-MOBAMMOAutoSession",
+  "-MOBAMMOAutoUser=mimet_bp_test",
+  "-MOBAMMOAutoCharacter=BPHero"
 ) -WorkingDirectory (Split-Path -Parent $gameExe)

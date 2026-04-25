@@ -1,5 +1,7 @@
 import type { FastifyPluginAsync } from "fastify";
 
+import { createAuthToken } from "./tokens.js";
+
 interface LoginBody {
   username?: string;
 }
@@ -28,7 +30,9 @@ export const registerAuthRoutes: FastifyPluginAsync = async (app) => {
 
       return {
         accountId: account.id,
-        token: `mock-token-${account.id}`,
+        token: createAuthToken(account.id, app.appConfig.authTokenSecret, app.appConfig.authTokenTtlSeconds),
+        tokenType: "Bearer",
+        expiresIn: app.appConfig.authTokenTtlSeconds,
         username: account.username,
       };
     } catch (error) {

@@ -101,6 +101,7 @@ private:
     UPROPERTY(Transient) TObjectPtr<UTextBlock> KillDeathText;
     UPROPERTY(Transient) TObjectPtr<UTextBlock> PlayersOnlineText;
     UPROPERTY(Transient) TObjectPtr<UTextBlock> RosterText;
+    UPROPERTY(Transient) TObjectPtr<UTextBlock> SaveConnectionText;
 
     // Center notifications
     UPROPERTY(Transient) TObjectPtr<UTextBlock> CombatEventText;

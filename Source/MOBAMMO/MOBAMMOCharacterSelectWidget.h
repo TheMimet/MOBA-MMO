@@ -7,6 +7,7 @@
 #include "MOBAMMOCharacterSelectWidget.generated.h"
 
 class UMOBAMMOBackendSubsystem;
+class UWebBrowser;
 
 UCLASS(BlueprintType, Blueprintable)
 class MOBAMMO_API UMOBAMMOCharacterSelectWidget : public UUserWidget
@@ -16,6 +17,9 @@ class MOBAMMO_API UMOBAMMOCharacterSelectWidget : public UUserWidget
 public:
     virtual void NativeOnInitialized() override;
     virtual void NativeConstruct() override;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="CharacterSelect")
+    FString WebUIBaseUrl = TEXT("http://127.0.0.1:3002");
 
     UFUNCTION(BlueprintCallable, Category="CharacterSelect")
     void RefreshFromBackend();
@@ -30,7 +34,9 @@ protected:
 private:
     void BuildLayout();
     void BindToSubsystem(UMOBAMMOBackendSubsystem* BackendSubsystem);
-    void UpdateCharacterList();
+    void PushStateToWebUI();
+    UFUNCTION()
+    void HandleConsoleMessage(const FString& Message, const FString& Source, int32 Line);
 
     UFUNCTION()
     void HandleBackendStateChanged();
@@ -50,29 +56,9 @@ private:
     UFUNCTION()
     void HandleRequestFailed(const FString& ErrorMessage);
 
-    UFUNCTION()
-    void HandleCharacterButtonClicked(const FString& CharacterId);
-
-    UFUNCTION()
-    void HandleCreateButtonClicked();
-    
-    UFUNCTION()
-    void HandlePlayButtonClicked();
-
     UPROPERTY(Transient)
-    class UBorder* RootBorder;
-
-    UPROPERTY(Transient)
-    class UVerticalBox* CharacterListContainer;
-
-    UPROPERTY(Transient)
-    class UButton* CreateCharacterButton;
-
-    UPROPERTY(Transient)
-    class UButton* PlayButton;
-
-    UPROPERTY(Transient)
-    class UEditableTextBox* NewCharacterNameInput;
+    UWebBrowser* WebBrowserWidget;
 
     bool bBoundToSubsystem = false;
+    bool bPageLoaded = false;
 };

@@ -7,7 +7,7 @@ AMOBAMMOPlayerState::AMOBAMMOPlayerState()
     bReplicates = true;
 }
 
-void AMOBAMMOPlayerState::ApplySessionIdentity(const FString& InAccountId, const FString& InCharacterId, const FString& InCharacterName, const FString& InClassId, int32 InLevel)
+void AMOBAMMOPlayerState::ApplySessionIdentity(const FString& InAccountId, const FString& InCharacterId, const FString& InSessionId, const FString& InCharacterName, const FString& InClassId, int32 InLevel)
 {
     if (!HasAuthority())
     {
@@ -16,10 +16,63 @@ void AMOBAMMOPlayerState::ApplySessionIdentity(const FString& InAccountId, const
 
     AccountId = InAccountId;
     CharacterId = InCharacterId;
+    SessionId = InSessionId;
     CharacterName = InCharacterName;
     ClassId = InClassId;
     CharacterLevel = FMath::Max(1, InLevel);
+    PersistenceStatus = TEXT("Ready");
+    PersistenceErrorMessage.Reset();
     SetPlayerName(CharacterName.IsEmpty() ? TEXT("Player") : CharacterName);
+    ForceNetUpdate();
+    BroadcastStateUpdated();
+}
+
+void AMOBAMMOPlayerState::SetPersistenceStatus(const FString& InStatus, const FString& InErrorMessage)
+{
+    if (!HasAuthority())
+    {
+        return;
+    }
+
+    PersistenceStatus = InStatus.IsEmpty() ? TEXT("Ready") : InStatus;
+    PersistenceErrorMessage = InErrorMessage;
+    ForceNetUpdate();
+    BroadcastStateUpdated();
+}
+
+void AMOBAMMOPlayerState::ApplyPersistentCharacterState(int32 InExperience, const FVector& InSavedWorldPosition, float InCurrentHealth, float InMaxHealth, float InCurrentMana, float InMaxMana, int32 InKillCount, int32 InDeathCount)
+{
+    if (!HasAuthority())
+    {
+        return;
+    }
+
+    CharacterExperience = FMath::Max(0, InExperience);
+    SavedWorldPosition = InSavedWorldPosition;
+    MaxHealth = FMath::Max(1.0f, InMaxHealth);
+    CurrentHealth = FMath::Clamp(InCurrentHealth, 0.0f, MaxHealth);
+    MaxMana = FMath::Max(0.0f, InMaxMana);
+    CurrentMana = FMath::Clamp(InCurrentMana, 0.0f, MaxMana);
+    KillCount = FMath::Max(0, InKillCount);
+    DeathCount = FMath::Max(0, InDeathCount);
+    bHasPersistentCharacterSnapshot = true;
+    bPersistentSpawnLocationConsumed = false;
+    ForceNetUpdate();
+    BroadcastStateUpdated();
+}
+
+void AMOBAMMOPlayerState::ApplyAppearanceSelection(int32 InPresetId, int32 InColorIndex, int32 InShade, int32 InTransparent, int32 InTextureDetail)
+{
+    if (!HasAuthority())
+    {
+        return;
+    }
+
+    PresetId = InPresetId;
+    ColorIndex = InColorIndex;
+    Shade = InShade;
+    Transparent = InTransparent;
+    TextureDetail = InTextureDetail;
     ForceNetUpdate();
     BroadcastStateUpdated();
 }
@@ -40,8 +93,6 @@ void AMOBAMMOPlayerState::InitializeAttributes(float InMaxHealth, float InMaxMan
     DrainCooldownEndServerTime = 0.0f;
     ManaSurgeCooldownEndServerTime = 0.0f;
     ArcChargeEndServerTime = 0.0f;
-    KillCount = 0;
-    DeathCount = 0;
     RespawnAvailableServerTime = 0.0f;
     ForceNetUpdate();
     BroadcastStateUpdated();
@@ -361,9 +412,20 @@ void AMOBAMMOPlayerState::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& 
 
     DOREPLIFETIME(AMOBAMMOPlayerState, AccountId);
     DOREPLIFETIME(AMOBAMMOPlayerState, CharacterId);
+    DOREPLIFETIME(AMOBAMMOPlayerState, SessionId);
+    DOREPLIFETIME(AMOBAMMOPlayerState, PersistenceStatus);
+    DOREPLIFETIME(AMOBAMMOPlayerState, PersistenceErrorMessage);
     DOREPLIFETIME(AMOBAMMOPlayerState, CharacterName);
     DOREPLIFETIME(AMOBAMMOPlayerState, ClassId);
     DOREPLIFETIME(AMOBAMMOPlayerState, CharacterLevel);
+    DOREPLIFETIME(AMOBAMMOPlayerState, CharacterExperience);
+    DOREPLIFETIME(AMOBAMMOPlayerState, SavedWorldPosition);
+    DOREPLIFETIME(AMOBAMMOPlayerState, PresetId);
+    DOREPLIFETIME(AMOBAMMOPlayerState, ColorIndex);
+    DOREPLIFETIME(AMOBAMMOPlayerState, Shade);
+    DOREPLIFETIME(AMOBAMMOPlayerState, Transparent);
+    DOREPLIFETIME(AMOBAMMOPlayerState, TextureDetail);
+    DOREPLIFETIME(AMOBAMMOPlayerState, bHasPersistentCharacterSnapshot);
     DOREPLIFETIME(AMOBAMMOPlayerState, CurrentHealth);
     DOREPLIFETIME(AMOBAMMOPlayerState, MaxHealth);
     DOREPLIFETIME(AMOBAMMOPlayerState, CurrentMana);
@@ -384,6 +446,11 @@ void AMOBAMMOPlayerState::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& 
 }
 
 void AMOBAMMOPlayerState::OnRep_PlayerIdentity()
+{
+    BroadcastStateUpdated();
+}
+
+void AMOBAMMOPlayerState::OnRep_PersistenceStatus()
 {
     BroadcastStateUpdated();
 }

@@ -20,6 +20,7 @@ public class MOBAMMO : ModuleRules
                 "HTTP",
                 "Json",
                 "JsonUtilities",
+                "WebBrowserWidget",
                 "GameplayTags",
                 "GameplayTasks",
                 "MOBAMMOAI"

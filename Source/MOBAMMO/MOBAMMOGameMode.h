@@ -21,6 +21,7 @@ public:
     virtual FString InitNewPlayer(APlayerController* NewPlayerController, const FUniqueNetIdRepl& UniqueId, const FString& Options, const FString& Portal) override;
     virtual void PostLogin(APlayerController* NewPlayer) override;
     virtual void Logout(AController* Exiting) override;
+    virtual void RestartPlayer(AController* NewPlayer) override;
 
     UFUNCTION(BlueprintCallable, Category="MOBAMMO|Gameplay")
     bool ApplyDamageToPlayer(AController* TargetController, float Amount);
@@ -66,6 +67,20 @@ private:
     bool IsTrainingDummySelected(const AMOBAMMOPlayerState* InstigatorState) const;
     bool IsTrainingMinionSelected(const AMOBAMMOPlayerState* InstigatorState) const;
     void InitializeDefaultAttributes(AMOBAMMOPlayerState* PlayerState) const;
+    bool HasUsableSavedWorldPosition(const AMOBAMMOPlayerState* PlayerState) const;
+    bool IsInsideArenaBounds(const FVector& Location) const;
+    FVector ClampToArenaBounds(const FVector& Location) const;
+    FVector GetSafeArenaReturnLocation() const;
+    void ReturnControllerToArena(AController* Controller, const TCHAR* Reason);
+    void RestorePlayerPawnToSavedLocation(AController* Controller);
+    void StartPlayerAutoSaveLoop();
+    void StartArenaSafetyLoop();
+    void StartPlayerSessionHeartbeatLoop();
+    void SaveAllActivePlayers();
+    void EnforceArenaBoundsForAllPlayers();
+    void SavePlayerProgress(AController* Controller) const;
+    void HeartbeatAllActivePlayers();
+    void HeartbeatPlayerSession(AController* Controller) const;
     AController* ResolveDebugTarget(AController* InstigatorController) const;
     bool IsControllerInAbilityRange(const AController* SourceController, const AController* TargetController, float AbilityRange) const;
     void PushCombatLog(const FString& CombatLog) const;
@@ -124,6 +139,26 @@ private:
     UPROPERTY(EditDefaultsOnly, Category="MOBAMMO|Gameplay")
     float DebugRespawnDelayDuration = 3.0f;
 
+    UPROPERTY(EditDefaultsOnly, Category="MOBAMMO|Persistence")
+    float PlayerAutoSaveInterval = 5.0f;
+
+    UPROPERTY(EditDefaultsOnly, Category="MOBAMMO|Persistence")
+    float PlayerSessionHeartbeatInterval = 20.0f;
+
+    UPROPERTY(EditDefaultsOnly, Category="MOBAMMO|Arena")
+    FVector ArenaMinBounds = FVector(-3500.0f, -2500.0f, -500.0f);
+
+    UPROPERTY(EditDefaultsOnly, Category="MOBAMMO|Arena")
+    FVector ArenaMaxBounds = FVector(3500.0f, 2500.0f, 1500.0f);
+
+    UPROPERTY(EditDefaultsOnly, Category="MOBAMMO|Arena")
+    FVector ArenaSafeReturnLocation = FVector(0.0f, 0.0f, 220.0f);
+
+    UPROPERTY(EditDefaultsOnly, Category="MOBAMMO|Arena")
+    float ArenaSafetyCheckInterval = 0.25f;
+
+    TMap<APlayerController*, FString> PendingSessionOptionsByController;
+
     UPROPERTY(EditDefaultsOnly, Category="MOBAMMO|Training")
     FVector TrainingDummySpawnLocation = FVector(520.0f, 360.0f, 140.0f);
 
@@ -165,4 +200,7 @@ private:
 
     FTimerHandle TrainingMinionRespawnTimerHandle;
     FTimerHandle TrainingMinionAutoAttackTimerHandle;
+    FTimerHandle PlayerAutoSaveTimerHandle;
+    FTimerHandle PlayerSessionHeartbeatTimerHandle;
+    FTimerHandle ArenaSafetyTimerHandle;
 };

@@ -8,9 +8,12 @@
 #include "JsonObjectConverter.h"
 #include "JsonObjectWrapper.h"
 #include "MOBAMMOBackendConfig.h"
+#include "MOBAMMOPlayerState.h"
 #include "Serialization/JsonReader.h"
 #include "Serialization/JsonSerializer.h"
 #include "Async/Async.h"
+#include "GameFramework/Pawn.h"
+#include "TimerManager.h"
 
 namespace
 {
@@ -57,6 +60,179 @@ namespace
         AsyncTask(ENamedThreads::GameThread, MoveTemp(Callback));
     }
 
+    struct FCharacterSaveSnapshot
+    {
+        FString AccountId;
+        FString CharacterId;
+        FString SessionId;
+        FVector Position = FVector::ZeroVector;
+        bool bHasPosition = false;
+        int32 Level = 1;
+        int32 Experience = 0;
+        float Health = 100.0f;
+        float MaxHealth = 100.0f;
+        float Mana = 50.0f;
+        float MaxMana = 50.0f;
+        int32 KillCount = 0;
+        int32 DeathCount = 0;
+        int64 SaveSequence = 0;
+    };
+
+    bool TryBuildCharacterSaveSnapshot(APlayerController* PlayerController, FCharacterSaveSnapshot& OutSnapshot, FString& OutError, bool bRequirePawn = true)
+    {
+        if (!PlayerController)
+        {
+            OutError = TEXT("Karakter kaydi icin PlayerController gereklidir.");
+            return false;
+        }
+
+        const AMOBAMMOPlayerState* PlayerState = PlayerController->GetPlayerState<AMOBAMMOPlayerState>();
+        const APawn* PlayerPawn = PlayerController->GetPawn();
+        if (!PlayerState || (bRequirePawn && !PlayerPawn))
+        {
+            OutError = TEXT("Kayit icin gecerli karakter, session ve pawn bulunamadi.");
+            return false;
+        }
+
+        OutSnapshot.AccountId = PlayerState->GetAccountId().TrimStartAndEnd();
+        OutSnapshot.CharacterId = PlayerState->GetCharacterId().TrimStartAndEnd();
+        OutSnapshot.SessionId = PlayerState->GetSessionId().TrimStartAndEnd();
+        if (OutSnapshot.CharacterId.IsEmpty() || OutSnapshot.SessionId.IsEmpty())
+        {
+            OutError = TEXT("Kayit icin gecerli karakter, session ve pawn bulunamadi.");
+            return false;
+        }
+
+        if (PlayerPawn)
+        {
+            OutSnapshot.Position = PlayerPawn->GetActorLocation();
+            OutSnapshot.bHasPosition = true;
+        }
+
+        OutSnapshot.Level = PlayerState->GetCharacterLevel();
+        OutSnapshot.Experience = PlayerState->GetCharacterExperience();
+        OutSnapshot.Health = PlayerState->GetCurrentHealth();
+        OutSnapshot.MaxHealth = PlayerState->GetMaxHealth();
+        OutSnapshot.Mana = PlayerState->GetCurrentMana();
+        OutSnapshot.MaxMana = PlayerState->GetMaxMana();
+        OutSnapshot.KillCount = PlayerState->GetKills();
+        OutSnapshot.DeathCount = PlayerState->GetDeaths();
+
+        const FDateTime SnapshotUtc = FDateTime::UtcNow();
+        OutSnapshot.SaveSequence = (SnapshotUtc.ToUnixTimestamp() * 1000LL) + SnapshotUtc.GetMillisecond();
+        return true;
+    }
+
+    FString BuildCharacterSavePayload(const FCharacterSaveSnapshot& Snapshot, bool bIncludeCharacterId)
+    {
+        const FString CharacterField = bIncludeCharacterId
+            ? FString::Printf(TEXT("\"characterId\":\"%s\","), *Snapshot.CharacterId.ReplaceCharWithEscapedChar())
+            : FString();
+        const FString PositionField = Snapshot.bHasPosition
+            ? FString::Printf(TEXT("\"position\":{\"x\":%.3f,\"y\":%.3f,\"z\":%.3f},"), Snapshot.Position.X, Snapshot.Position.Y, Snapshot.Position.Z)
+            : FString();
+
+        return FString::Printf(
+            TEXT("{%s\"sessionId\":\"%s\",%s\"level\":%d,\"experience\":%d,\"hp\":%.3f,\"maxHp\":%.3f,\"mana\":%.3f,\"maxMana\":%.3f,\"killCount\":%d,\"deathCount\":%d,\"saveSequence\":%lld}"),
+            *CharacterField,
+            *Snapshot.SessionId.ReplaceCharWithEscapedChar(),
+            *PositionField,
+            Snapshot.Level,
+            Snapshot.Experience,
+            Snapshot.Health,
+            Snapshot.MaxHealth,
+            Snapshot.Mana,
+            Snapshot.MaxMana,
+            Snapshot.KillCount,
+            Snapshot.DeathCount,
+            Snapshot.SaveSequence
+        );
+    }
+
+    FString BuildSessionHeartbeatPayload(const FCharacterSaveSnapshot& Snapshot)
+    {
+        return FString::Printf(
+            TEXT("{\"characterId\":\"%s\",\"sessionId\":\"%s\"}"),
+            *Snapshot.CharacterId.ReplaceCharWithEscapedChar(),
+            *Snapshot.SessionId.ReplaceCharWithEscapedChar()
+        );
+    }
+
+    constexpr int32 MaxTransientBackendRetries = 2;
+
+    bool IsTransientBackendFailure(bool bWasSuccessful, FHttpResponsePtr Response)
+    {
+        if (!bWasSuccessful || !Response.IsValid())
+        {
+            return true;
+        }
+
+        const int32 ResponseCode = Response->GetResponseCode();
+        return ResponseCode == 408 || ResponseCode == 429 || ResponseCode >= 500;
+    }
+
+    float GetTransientBackendRetryDelaySeconds(int32 Attempt)
+    {
+        return Attempt <= 1 ? 0.75f : 1.5f;
+    }
+
+    void ScheduleTransientBackendRetry(UObject* Context, const TCHAR* Label, int32 NextAttempt, TFunction<void(int32)> RetryCallback)
+    {
+        UE_LOG(LogTemp, Warning, TEXT("[Backend] Transient %s failure. Retrying attempt %d/%d in %.2fs."),
+            Label,
+            NextAttempt + 1,
+            MaxTransientBackendRetries + 1,
+            GetTransientBackendRetryDelaySeconds(NextAttempt));
+
+        UWorld* World = Context ? Context->GetWorld() : nullptr;
+        if (!World)
+        {
+            RetryCallback(NextAttempt);
+            return;
+        }
+
+        FTimerDelegate RetryDelegate;
+        RetryDelegate.BindLambda([NextAttempt, RetryCallback = MoveTemp(RetryCallback)]() mutable
+        {
+            RetryCallback(NextAttempt);
+        });
+
+        FTimerHandle RetryTimerHandle;
+        World->GetTimerManager().SetTimer(RetryTimerHandle, MoveTemp(RetryDelegate), GetTransientBackendRetryDelaySeconds(NextAttempt), false);
+    }
+
+    int32 ReadOptionalJsonInt(const TSharedPtr<FJsonObject>& JsonObject, const TCHAR* FieldName, int32 DefaultValue)
+    {
+        if (!JsonObject.IsValid())
+        {
+            return DefaultValue;
+        }
+
+        double NumericValue = 0.0;
+        if (JsonObject->TryGetNumberField(FieldName, NumericValue))
+        {
+            return static_cast<int32>(NumericValue);
+        }
+
+        return DefaultValue;
+    }
+
+    float ReadOptionalJsonFloat(const TSharedPtr<FJsonObject>& JsonObject, const TCHAR* FieldName, float DefaultValue)
+    {
+        if (!JsonObject.IsValid())
+        {
+            return DefaultValue;
+        }
+
+        double NumericValue = 0.0;
+        if (JsonObject->TryGetNumberField(FieldName, NumericValue))
+        {
+            return static_cast<float>(NumericValue);
+        }
+
+        return DefaultValue;
+    }
+
     bool ShouldSkipAutomaticBackendBootstrap(const UGameInstanceSubsystem* Subsystem)
     {
         if (!Subsystem)
@@ -86,6 +262,7 @@ UMOBAMMOBackendSubsystem::UMOBAMMOBackendSubsystem()
     , CharacterListStatus(TEXT("Idle"))
     , CharacterStatus(TEXT("Idle"))
     , SessionStatus(TEXT("Idle"))
+    , SaveStatus(TEXT("Idle"))
 {
 }
 
@@ -191,6 +368,7 @@ void UMOBAMMOBackendSubsystem::MockLogin(const FString& Username)
             Result.Username = JsonObject->GetStringField(TEXT("username"));
 
             LastAccountId = Result.AccountId;
+            LastAuthToken = Result.Token;
             UE_LOG(LogTemp, Log, TEXT("[Backend] Login succeeded. AccountId=%s Username=%s"), *Result.AccountId, *Result.Username);
 
             RunOnGameThread([this, Result]()
@@ -260,6 +438,7 @@ void UMOBAMMOBackendSubsystem::CreateCharacter(const FString& AccountId, const F
     Request->SetURL(BuildUrl(TEXT("/characters")));
     Request->SetVerb(TEXT("POST"));
     Request->SetHeader(TEXT("Content-Type"), TEXT("application/json"));
+    ApplyAuthHeader(Request);
     Request->SetContentAsString(
         FString::Printf(
             TEXT("{\"accountId\":\"%s\",\"name\":\"%s\",\"classId\":\"%s\",\"presetId\":%d,\"colorIndex\":%d,\"shade\":%d,\"transparent\":%d,\"textureDetail\":%d}"),
@@ -365,6 +544,7 @@ void UMOBAMMOBackendSubsystem::ListCharacters(const FString& AccountId)
     TSharedRef<IHttpRequest, ESPMode::ThreadSafe> Request = FHttpModule::Get().CreateRequest();
     Request->SetURL(BuildUrl(FString::Printf(TEXT("/characters?accountId=%s"), *TrimmedAccountId)));
     Request->SetVerb(TEXT("GET"));
+    ApplyAuthHeader(Request);
 
     Request->OnProcessRequestComplete().BindLambda(
         [this](FHttpRequestPtr HttpRequest, FHttpResponsePtr Response, bool bWasSuccessful)
@@ -468,6 +648,8 @@ void UMOBAMMOBackendSubsystem::StartSession(const FString& CharacterId)
     {
         LastErrorMessage = TEXT("CharacterId gereklidir.");
         SessionStatus = TEXT("Failed");
+        bReconnectTravelPending = false;
+        PendingReconnectPlayerController.Reset();
         NotifyDebugStateChanged();
         OnSessionStartFailed.Broadcast(TEXT("CharacterId gereklidir."));
         return;
@@ -482,6 +664,7 @@ void UMOBAMMOBackendSubsystem::StartSession(const FString& CharacterId)
     Request->SetURL(BuildUrl(TEXT("/session/start")));
     Request->SetVerb(TEXT("POST"));
     Request->SetHeader(TEXT("Content-Type"), TEXT("application/json"));
+    ApplyAuthHeader(Request);
     Request->SetContentAsString(FString::Printf(TEXT("{\"characterId\":\"%s\"}"), *TrimmedCharacterId.ReplaceCharWithEscapedChar()));
 
     Request->OnProcessRequestComplete().BindLambda(
@@ -497,6 +680,8 @@ void UMOBAMMOBackendSubsystem::StartSession(const FString& CharacterId)
                 {
                     LastErrorMessage = TEXT("Session baslatma istegi basarisiz oldu.");
                     SessionStatus = TEXT("Failed");
+                    bReconnectTravelPending = false;
+                    PendingReconnectPlayerController.Reset();
                     NotifyDebugStateChanged();
                     OnSessionStartFailed.Broadcast(TEXT("Session baslatma istegi basarisiz oldu."));
                 });
@@ -515,6 +700,8 @@ void UMOBAMMOBackendSubsystem::StartSession(const FString& CharacterId)
                 {
                     LastErrorMessage = ErrorMessage;
                     SessionStatus = TEXT("Failed");
+                    bReconnectTravelPending = false;
+                    PendingReconnectPlayerController.Reset();
                     NotifyDebugStateChanged();
                     OnSessionStartFailed.Broadcast(ErrorMessage);
                 });
@@ -523,12 +710,15 @@ void UMOBAMMOBackendSubsystem::StartSession(const FString& CharacterId)
 
             const TSharedPtr<FJsonObject>* CharacterObject = nullptr;
             const TSharedPtr<FJsonObject>* ServerObject = nullptr;
+            const TSharedPtr<FJsonObject>* CharacterSnapshotObject = nullptr;
             if (!JsonObject->TryGetObjectField(TEXT("character"), CharacterObject) || !JsonObject->TryGetObjectField(TEXT("server"), ServerObject))
             {
                 RunOnGameThread([this]()
                 {
                     LastErrorMessage = TEXT("Session yaniti eksik veya gecersiz.");
                     SessionStatus = TEXT("Failed");
+                    bReconnectTravelPending = false;
+                    PendingReconnectPlayerController.Reset();
                     NotifyDebugStateChanged();
                     OnSessionStartFailed.Broadcast(TEXT("Session yaniti eksik veya gecersiz."));
                 });
@@ -539,14 +729,49 @@ void UMOBAMMOBackendSubsystem::StartSession(const FString& CharacterId)
             Result.SessionId = JsonObject->GetStringField(TEXT("sessionId"));
             Result.CharacterId = (*CharacterObject)->GetStringField(TEXT("id"));
             Result.CharacterName = (*CharacterObject)->GetStringField(TEXT("name"));
+            Result.CharacterClassId = (*CharacterObject)->GetStringField(TEXT("classId"));
             Result.CharacterLevel = (*CharacterObject)->GetIntegerField(TEXT("level"));
+            Result.CharacterExperience = ReadOptionalJsonInt(*CharacterObject, TEXT("experience"), 0);
             Result.ServerHost = (*ServerObject)->GetStringField(TEXT("host"));
             Result.ServerPort = (*ServerObject)->GetIntegerField(TEXT("port"));
             Result.MapName = (*ServerObject)->GetStringField(TEXT("map"));
             Result.ConnectString = (*ServerObject)->GetStringField(TEXT("connectString"));
 
+            const TSharedPtr<FJsonObject>* PositionObject = nullptr;
+            if ((*CharacterObject)->TryGetObjectField(TEXT("position"), PositionObject) && PositionObject && PositionObject->IsValid())
+            {
+                Result.CharacterPosition.X = ReadOptionalJsonFloat(*PositionObject, TEXT("x"), 0.0f);
+                Result.CharacterPosition.Y = ReadOptionalJsonFloat(*PositionObject, TEXT("y"), 0.0f);
+                Result.CharacterPosition.Z = ReadOptionalJsonFloat(*PositionObject, TEXT("z"), 0.0f);
+            }
+
+            const TSharedPtr<FJsonObject>* AppearanceObject = nullptr;
+            if ((*CharacterObject)->TryGetObjectField(TEXT("appearance"), AppearanceObject) && AppearanceObject && AppearanceObject->IsValid())
+            {
+                Result.CharacterPresetId = ReadOptionalJsonInt(*AppearanceObject, TEXT("presetId"), Result.CharacterPresetId);
+                Result.CharacterColorIndex = ReadOptionalJsonInt(*AppearanceObject, TEXT("colorIndex"), Result.CharacterColorIndex);
+                Result.CharacterShade = ReadOptionalJsonInt(*AppearanceObject, TEXT("shade"), Result.CharacterShade);
+                Result.CharacterTransparent = ReadOptionalJsonInt(*AppearanceObject, TEXT("transparent"), Result.CharacterTransparent);
+                Result.CharacterTextureDetail = ReadOptionalJsonInt(*AppearanceObject, TEXT("textureDetail"), Result.CharacterTextureDetail);
+            }
+
+            if (JsonObject->TryGetObjectField(TEXT("characterSnapshot"), CharacterSnapshotObject) && CharacterSnapshotObject && CharacterSnapshotObject->IsValid())
+            {
+                const TSharedPtr<FJsonObject>* StatsObject = nullptr;
+                if ((*CharacterSnapshotObject)->TryGetObjectField(TEXT("stats"), StatsObject) && StatsObject && StatsObject->IsValid())
+                {
+                    Result.CurrentHealth = ReadOptionalJsonFloat(*StatsObject, TEXT("hp"), Result.CurrentHealth);
+                    Result.MaxHealth = ReadOptionalJsonFloat(*StatsObject, TEXT("maxHp"), Result.MaxHealth);
+                    Result.CurrentMana = ReadOptionalJsonFloat(*StatsObject, TEXT("mana"), Result.CurrentMana);
+                    Result.MaxMana = ReadOptionalJsonFloat(*StatsObject, TEXT("maxMana"), Result.MaxMana);
+                    Result.KillCount = ReadOptionalJsonInt(*StatsObject, TEXT("killCount"), Result.KillCount);
+                    Result.DeathCount = ReadOptionalJsonInt(*StatsObject, TEXT("deathCount"), Result.DeathCount);
+                }
+            }
+
             LastCharacterId = Result.CharacterId;
             LastSessionConnectString = Result.ConnectString;
+            LastSessionResult = Result;
             UE_LOG(LogTemp, Log, TEXT("[Backend] StartSession succeeded. CharacterId=%s ConnectString=%s Map=%s"),
                 *Result.CharacterId,
                 *Result.ConnectString,
@@ -557,14 +782,38 @@ void UMOBAMMOBackendSubsystem::StartSession(const FString& CharacterId)
                 bCharacterFlowActionAuthorized = false;
                 bManualCharacterFlowPending = false;
                 SessionStatus = TEXT("Ready");
+                SaveStatus = TEXT("Ready");
+                LastSaveErrorMessage.Reset();
+                bSaveConnectionHealthy = true;
                 NotifyDebugStateChanged();
                 OnSessionStarted.Broadcast(Result);
+
+                if (bReconnectTravelPending)
+                {
+                    APlayerController* ReconnectController = PendingReconnectPlayerController.Get();
+                    bReconnectTravelPending = false;
+                    PendingReconnectPlayerController.Reset();
+
+                    if (ReconnectController)
+                    {
+                        TravelToSession(ReconnectController, Result.ConnectString);
+                    }
+                }
             });
         }
     );
 
     const bool bRequestStarted = Request->ProcessRequest();
     UE_LOG(LogTemp, Log, TEXT("[Backend] StartSession ProcessRequest returned %s"), bRequestStarted ? TEXT("true") : TEXT("false"));
+    if (!bRequestStarted)
+    {
+        LastErrorMessage = TEXT("Session baslatma istegi baslatilamadi.");
+        SessionStatus = TEXT("Failed");
+        bReconnectTravelPending = false;
+        PendingReconnectPlayerController.Reset();
+        NotifyDebugStateChanged();
+        OnSessionStartFailed.Broadcast(TEXT("Session baslatma istegi baslatilamadi."));
+    }
 }
 
 bool UMOBAMMOBackendSubsystem::TravelToSession(APlayerController* PlayerController, const FString& ConnectString)
@@ -589,6 +838,12 @@ bool UMOBAMMOBackendSubsystem::TravelToSession(APlayerController* PlayerControll
         SessionStatus = TEXT("TravelFailed");
         NotifyDebugStateChanged();
         return false;
+    }
+
+    if (SessionStatus == TEXT("Traveling") && LastSessionConnectString == FinalConnectString)
+    {
+        UE_LOG(LogTemp, Log, TEXT("[Backend] TravelToSession skipped because travel is already in progress. ConnectString=%s"), *FinalConnectString);
+        return true;
     }
 
     LastSessionConnectString = FinalConnectString;
@@ -632,12 +887,24 @@ FString UMOBAMMOBackendSubsystem::BuildReplicatedTravelConnectString(const FStri
         }
     };
 
+    auto AppendIntOption = [&AppendOption](const TCHAR* Key, int32 Value)
+    {
+        AppendOption(Key, FString::FromInt(Value));
+    };
+
+    auto AppendFloatOption = [&AppendOption](const TCHAR* Key, float Value)
+    {
+        AppendOption(Key, FString::SanitizeFloat(Value));
+    };
+
     AppendOption(TEXT("AccountId"), LastAccountId);
     AppendOption(TEXT("CharacterId"), LastCharacterId);
+    AppendOption(TEXT("SessionId"), LastSessionResult.SessionId);
 
     FString SelectedCharacterName;
     FString SelectedClassId;
     int32 SelectedLevel = 1;
+    int32 SelectedExperience = 0;
     for (const FBackendCharacterResult& Item : CachedCharacters)
     {
         if (Item.CharacterId == LastCharacterId)
@@ -649,15 +916,74 @@ FString UMOBAMMOBackendSubsystem::BuildReplicatedTravelConnectString(const FStri
         }
     }
 
+    if (LastSessionResult.CharacterId == LastCharacterId)
+    {
+        if (!LastSessionResult.CharacterName.IsEmpty())
+        {
+            SelectedCharacterName = LastSessionResult.CharacterName;
+        }
+
+        if (!LastSessionResult.CharacterClassId.IsEmpty())
+        {
+            SelectedClassId = LastSessionResult.CharacterClassId;
+        }
+
+        SelectedLevel = FMath::Max(1, LastSessionResult.CharacterLevel);
+        SelectedExperience = FMath::Max(0, LastSessionResult.CharacterExperience);
+    }
+
     AppendOption(TEXT("CharacterName"), SelectedCharacterName.IsEmpty() ? LastUsername : SelectedCharacterName);
     AppendOption(TEXT("ClassId"), SelectedClassId);
-    FinalConnectString += FString::Printf(TEXT("?Level=%d"), SelectedLevel);
+    AppendIntOption(TEXT("Level"), SelectedLevel);
+    AppendIntOption(TEXT("Experience"), SelectedExperience);
+
+    if (LastSessionResult.CharacterId == LastCharacterId)
+    {
+        AppendFloatOption(TEXT("PositionX"), LastSessionResult.CharacterPosition.X);
+        AppendFloatOption(TEXT("PositionY"), LastSessionResult.CharacterPosition.Y);
+        AppendFloatOption(TEXT("PositionZ"), LastSessionResult.CharacterPosition.Z);
+        AppendIntOption(TEXT("PresetId"), LastSessionResult.CharacterPresetId);
+        AppendIntOption(TEXT("ColorIndex"), LastSessionResult.CharacterColorIndex);
+        AppendIntOption(TEXT("Shade"), LastSessionResult.CharacterShade);
+        AppendIntOption(TEXT("Transparent"), LastSessionResult.CharacterTransparent);
+        AppendIntOption(TEXT("TextureDetail"), LastSessionResult.CharacterTextureDetail);
+        AppendFloatOption(TEXT("Health"), LastSessionResult.CurrentHealth);
+        AppendFloatOption(TEXT("MaxHealth"), LastSessionResult.MaxHealth);
+        AppendFloatOption(TEXT("Mana"), LastSessionResult.CurrentMana);
+        AppendFloatOption(TEXT("MaxMana"), LastSessionResult.MaxMana);
+        AppendIntOption(TEXT("KillCount"), LastSessionResult.KillCount);
+        AppendIntOption(TEXT("DeathCount"), LastSessionResult.DeathCount);
+    }
+
     return FinalConnectString;
 }
 
 FString UMOBAMMOBackendSubsystem::BuildUrl(const FString& Path) const
 {
     return FString::Printf(TEXT("%s%s"), *GetBackendBaseUrl(), *Path);
+}
+
+void UMOBAMMOBackendSubsystem::ApplyAuthHeader(const TSharedRef<IHttpRequest, ESPMode::ThreadSafe>& Request, const FString& TokenFallback) const
+{
+    FString Token = LastAuthToken.TrimStartAndEnd();
+    const FString TrimmedTokenFallback = TokenFallback.TrimStartAndEnd();
+    Token = Token.IsEmpty() ? TrimmedTokenFallback : Token;
+
+    if (!Token.IsEmpty())
+    {
+        Request->SetHeader(TEXT("Authorization"), FString::Printf(TEXT("Bearer %s"), *Token));
+        return;
+    }
+
+    const UWorld* World = GetWorld();
+    if (World && World->GetNetMode() == NM_DedicatedServer)
+    {
+        const FString SessionServerSecret = GetDefault<UMOBAMMOBackendConfig>()->SessionServerSecret.TrimStartAndEnd();
+        if (!SessionServerSecret.IsEmpty())
+        {
+            Request->SetHeader(TEXT("X-Session-Server-Secret"), SessionServerSecret);
+        }
+    }
 }
 
 bool UMOBAMMOBackendSubsystem::TryReadJsonResponse(FHttpResponseHandle Response, TSharedPtr<FJsonObject>& OutObject, FString& OutError) const
@@ -701,6 +1027,81 @@ FString UMOBAMMOBackendSubsystem::BuildErrorMessage(FHttpResponseHandle Response
     return FallbackMessage;
 }
 
+FString UMOBAMMOBackendSubsystem::BuildErrorCode(FHttpResponseHandle Response) const
+{
+    if (!Response.IsValid())
+    {
+        return FString();
+    }
+
+    TSharedPtr<FJsonObject> JsonObject;
+    TSharedRef<TJsonReader<>> Reader = TJsonReaderFactory<>::Create(Response->GetContentAsString());
+    if (FJsonSerializer::Deserialize(Reader, JsonObject) && JsonObject.IsValid())
+    {
+        FString ErrorCode;
+        if (JsonObject->TryGetStringField(TEXT("error"), ErrorCode))
+        {
+            return ErrorCode;
+        }
+    }
+
+    return FString();
+}
+
+bool UMOBAMMOBackendSubsystem::IsSessionInvalidationError(FHttpResponseHandle Response) const
+{
+    const FString ErrorCode = BuildErrorCode(Response);
+    return ErrorCode == TEXT("session_expired") || ErrorCode == TEXT("stale_or_invalid_session");
+}
+
+void UMOBAMMOBackendSubsystem::SetReplicatedPersistenceStatusForCharacter(const FString& CharacterId, const FString& Status, const FString& ErrorMessage) const
+{
+    const FString TrimmedCharacterId = CharacterId.TrimStartAndEnd();
+    UWorld* World = GetWorld();
+    if (TrimmedCharacterId.IsEmpty() || !World)
+    {
+        return;
+    }
+
+    for (FConstPlayerControllerIterator Iterator = World->GetPlayerControllerIterator(); Iterator; ++Iterator)
+    {
+        APlayerController* PlayerController = Iterator->Get();
+        AMOBAMMOPlayerState* PlayerState = PlayerController ? PlayerController->GetPlayerState<AMOBAMMOPlayerState>() : nullptr;
+        if (PlayerState && PlayerState->GetCharacterId() == TrimmedCharacterId)
+        {
+            PlayerState->SetPersistenceStatus(Status, ErrorMessage);
+        }
+    }
+}
+
+void UMOBAMMOBackendSubsystem::MarkSaveFailed(const FString& ErrorMessage, FHttpResponseHandle Response, const FString& CharacterId)
+{
+    LastErrorMessage = ErrorMessage;
+    LastSaveErrorMessage = ErrorMessage;
+    CharacterStatus = TEXT("SaveFailed");
+    SaveStatus = TEXT("Failed");
+    bSaveConnectionHealthy = false;
+
+    if (IsSessionInvalidationError(Response))
+    {
+        SessionStatus = TEXT("ReconnectRequired");
+        SaveStatus = TEXT("SessionInvalid");
+    }
+
+    SetReplicatedPersistenceStatusForCharacter(CharacterId, SaveStatus, ErrorMessage);
+
+    const int32 ResponseCode = Response.IsValid() ? Response->GetResponseCode() : 0;
+    const FString ErrorCode = Response.IsValid() ? BuildErrorCode(Response) : FString();
+    UE_LOG(LogTemp, Warning, TEXT("[Backend] Save failed. Status=%s SessionStatus=%s Code=%d ErrorCode=%s Message=%s"),
+        *SaveStatus,
+        *SessionStatus,
+        ResponseCode,
+        ErrorCode.IsEmpty() ? TEXT("<none>") : *ErrorCode,
+        *ErrorMessage);
+
+    NotifyDebugStateChanged();
+}
+
 void UMOBAMMOBackendSubsystem::SelectCharacter(const FString& CharacterId)
 {
     const FString TrimmedCharacterId = CharacterId.TrimStartAndEnd();
@@ -734,4 +1135,370 @@ void UMOBAMMOBackendSubsystem::StartSessionForSelectedCharacter()
 
     bCharacterFlowActionAuthorized = true;
     StartSession(SelectedCharacterId);
+}
+
+void UMOBAMMOBackendSubsystem::ReconnectCurrentSession(APlayerController* PlayerController)
+{
+    FString CharacterId = SelectedCharacterId;
+    if (CharacterId.IsEmpty())
+    {
+        CharacterId = LastCharacterId;
+    }
+    if (CharacterId.IsEmpty())
+    {
+        CharacterId = LastSessionResult.CharacterId;
+    }
+    if (CharacterId.IsEmpty() && PlayerController)
+    {
+        if (const AMOBAMMOPlayerState* PlayerState = PlayerController->GetPlayerState<AMOBAMMOPlayerState>())
+        {
+            CharacterId = PlayerState->GetCharacterId();
+        }
+    }
+
+    if (!PlayerController || CharacterId.IsEmpty())
+    {
+        LastErrorMessage = TEXT("Reconnect icin aktif karakter veya PlayerController bulunamadi.");
+        LastSaveErrorMessage = LastErrorMessage;
+        SessionStatus = TEXT("ReconnectFailed");
+        SaveStatus = TEXT("SessionInvalid");
+        bSaveConnectionHealthy = false;
+        NotifyDebugStateChanged();
+        return;
+    }
+
+    SelectedCharacterId = CharacterId;
+    LastCharacterId = CharacterId;
+    bReconnectTravelPending = true;
+    PendingReconnectPlayerController = PlayerController;
+    bCharacterFlowActionAuthorized = true;
+    SessionStatus = TEXT("Reconnecting");
+    SaveStatus = TEXT("Reconnecting");
+    NotifyDebugStateChanged();
+
+    UE_LOG(LogTemp, Log, TEXT("[Backend] Reconnect starting. CharacterId=%s"), *CharacterId);
+    StartSession(CharacterId);
+}
+
+void UMOBAMMOBackendSubsystem::SaveCurrentCharacterProgress(APlayerController* PlayerController)
+{
+    FCharacterSaveSnapshot Snapshot;
+    FString SnapshotError;
+    if (!TryBuildCharacterSaveSnapshot(PlayerController, Snapshot, SnapshotError))
+    {
+        MarkSaveFailed(SnapshotError);
+        return;
+    }
+
+    LastErrorMessage.Reset();
+    CharacterStatus = TEXT("Saving");
+    SaveStatus = TEXT("Saving");
+    NotifyDebugStateChanged();
+
+    TSharedPtr<TFunction<void(int32)>> SendAttempt = MakeShared<TFunction<void(int32)>>();
+    *SendAttempt = [this, Snapshot, SendAttempt](int32 Attempt)
+    {
+        TSharedRef<IHttpRequest, ESPMode::ThreadSafe> Request = FHttpModule::Get().CreateRequest();
+        Request->SetURL(BuildUrl(FString::Printf(TEXT("/characters/%s/save"), *Snapshot.CharacterId)));
+        Request->SetVerb(TEXT("POST"));
+        Request->SetHeader(TEXT("Content-Type"), TEXT("application/json"));
+        ApplyAuthHeader(Request);
+        Request->SetContentAsString(BuildCharacterSavePayload(Snapshot, false));
+
+        Request->OnProcessRequestComplete().BindLambda(
+            [this, Snapshot, SendAttempt, Attempt](FHttpRequestPtr HttpRequest, FHttpResponsePtr Response, bool bWasSuccessful)
+            {
+                if (IsTransientBackendFailure(bWasSuccessful, Response) && Attempt < MaxTransientBackendRetries)
+                {
+                    RunOnGameThread([this, SendAttempt, Attempt]()
+                    {
+                        ScheduleTransientBackendRetry(this, TEXT("save"), Attempt + 1, [SendAttempt](int32 NextAttempt)
+                        {
+                            (*SendAttempt)(NextAttempt);
+                        });
+                    });
+                    return;
+                }
+
+                if (!bWasSuccessful || !Response.IsValid())
+                {
+                    RunOnGameThread([this, Snapshot]()
+                    {
+                        MarkSaveFailed(TEXT("Karakter kaydi istegi basarisiz oldu."), nullptr, Snapshot.CharacterId);
+                    });
+                    return;
+                }
+
+                TSharedPtr<FJsonObject> JsonObject;
+                FString ErrorMessage;
+                if (!TryReadJsonResponse(Response, JsonObject, ErrorMessage))
+                {
+                    RunOnGameThread([this, ErrorMessage, Response, Snapshot]()
+                    {
+                        MarkSaveFailed(ErrorMessage, Response, Snapshot.CharacterId);
+                    });
+                    return;
+                }
+
+                RunOnGameThread([this, Snapshot]()
+                {
+                    CharacterStatus = TEXT("Saved");
+                    SaveStatus = TEXT("Saved");
+                    LastSaveErrorMessage.Reset();
+                    bSaveConnectionHealthy = true;
+                    LastCharacterId = Snapshot.CharacterId;
+                    SetReplicatedPersistenceStatusForCharacter(Snapshot.CharacterId, SaveStatus, FString());
+
+                    if (LastSessionResult.CharacterId == Snapshot.CharacterId)
+                    {
+                        LastSessionResult.CharacterLevel = Snapshot.Level;
+                        LastSessionResult.CharacterExperience = Snapshot.Experience;
+                        LastSessionResult.CharacterPosition = Snapshot.Position;
+                        LastSessionResult.CurrentHealth = Snapshot.Health;
+                        LastSessionResult.MaxHealth = Snapshot.MaxHealth;
+                        LastSessionResult.CurrentMana = Snapshot.Mana;
+                        LastSessionResult.MaxMana = Snapshot.MaxMana;
+                        LastSessionResult.KillCount = Snapshot.KillCount;
+                        LastSessionResult.DeathCount = Snapshot.DeathCount;
+                    }
+
+                    NotifyDebugStateChanged();
+                });
+            }
+        );
+
+        if (!Request->ProcessRequest())
+        {
+            if (Attempt < MaxTransientBackendRetries)
+            {
+                ScheduleTransientBackendRetry(this, TEXT("save start"), Attempt + 1, [SendAttempt](int32 NextAttempt)
+                {
+                    (*SendAttempt)(NextAttempt);
+                });
+                return;
+            }
+
+            MarkSaveFailed(TEXT("Karakter kaydi istegi baslatilamadi."), nullptr, Snapshot.CharacterId);
+        }
+    };
+
+    (*SendAttempt)(0);
+}
+
+void UMOBAMMOBackendSubsystem::HeartbeatCurrentCharacterSession(APlayerController* PlayerController)
+{
+    FCharacterSaveSnapshot Snapshot;
+    FString SnapshotError;
+    if (!TryBuildCharacterSaveSnapshot(PlayerController, Snapshot, SnapshotError, false))
+    {
+        MarkSaveFailed(SnapshotError);
+        return;
+    }
+
+    TSharedPtr<TFunction<void(int32)>> SendAttempt = MakeShared<TFunction<void(int32)>>();
+    *SendAttempt = [this, Snapshot, SendAttempt](int32 Attempt)
+    {
+        TSharedRef<IHttpRequest, ESPMode::ThreadSafe> Request = FHttpModule::Get().CreateRequest();
+        Request->SetURL(BuildUrl(TEXT("/session/heartbeat")));
+        Request->SetVerb(TEXT("POST"));
+        Request->SetHeader(TEXT("Content-Type"), TEXT("application/json"));
+        ApplyAuthHeader(Request);
+        Request->SetContentAsString(BuildSessionHeartbeatPayload(Snapshot));
+
+        Request->OnProcessRequestComplete().BindLambda(
+            [this, Snapshot, SendAttempt, Attempt](FHttpRequestPtr HttpRequest, FHttpResponsePtr Response, bool bWasSuccessful)
+            {
+                if (IsTransientBackendFailure(bWasSuccessful, Response) && Attempt < MaxTransientBackendRetries)
+                {
+                    RunOnGameThread([this, SendAttempt, Attempt]()
+                    {
+                        ScheduleTransientBackendRetry(this, TEXT("heartbeat"), Attempt + 1, [SendAttempt](int32 NextAttempt)
+                        {
+                            (*SendAttempt)(NextAttempt);
+                        });
+                    });
+                    return;
+                }
+
+                if (!bWasSuccessful || !Response.IsValid())
+                {
+                    RunOnGameThread([this, Snapshot]()
+                    {
+                        MarkSaveFailed(TEXT("Session heartbeat istegi basarisiz oldu."), nullptr, Snapshot.CharacterId);
+                    });
+                    return;
+                }
+
+                TSharedPtr<FJsonObject> JsonObject;
+                FString ErrorMessage;
+                if (!TryReadJsonResponse(Response, JsonObject, ErrorMessage))
+                {
+                    RunOnGameThread([this, ErrorMessage, Response, Snapshot]()
+                    {
+                        MarkSaveFailed(ErrorMessage, Response, Snapshot.CharacterId);
+                    });
+                    return;
+                }
+
+                RunOnGameThread([this, Snapshot]()
+                {
+                    LastSaveErrorMessage.Reset();
+                    bSaveConnectionHealthy = true;
+                    LastCharacterId = Snapshot.CharacterId;
+
+                    if (SessionStatus == TEXT("Ready") || SessionStatus == TEXT("Traveling") || SessionStatus == TEXT("ReconnectRequired"))
+                    {
+                        SessionStatus = TEXT("Active");
+                    }
+
+                    if (SaveStatus == TEXT("Idle") || SaveStatus == TEXT("Failed") || SaveStatus == TEXT("SessionInvalid"))
+                    {
+                        SaveStatus = TEXT("Ready");
+                    }
+
+                    SetReplicatedPersistenceStatusForCharacter(Snapshot.CharacterId, SaveStatus, FString());
+                    NotifyDebugStateChanged();
+                });
+            }
+        );
+
+        if (!Request->ProcessRequest())
+        {
+            if (Attempt < MaxTransientBackendRetries)
+            {
+                ScheduleTransientBackendRetry(this, TEXT("heartbeat start"), Attempt + 1, [SendAttempt](int32 NextAttempt)
+                {
+                    (*SendAttempt)(NextAttempt);
+                });
+                return;
+            }
+
+            MarkSaveFailed(TEXT("Session heartbeat istegi baslatilamadi."), nullptr, Snapshot.CharacterId);
+        }
+    };
+
+    (*SendAttempt)(0);
+}
+
+void UMOBAMMOBackendSubsystem::EndCurrentCharacterSession(APlayerController* PlayerController)
+{
+    FCharacterSaveSnapshot Snapshot;
+    FString SnapshotError;
+    if (!TryBuildCharacterSaveSnapshot(PlayerController, Snapshot, SnapshotError, false))
+    {
+        SessionStatus = TEXT("EndSkipped");
+        UE_LOG(LogTemp, Warning, TEXT("[Backend] EndSession skipped: %s"), *SnapshotError);
+        NotifyDebugStateChanged();
+        return;
+    }
+
+    LastErrorMessage.Reset();
+    CharacterStatus = TEXT("Saving");
+    SaveStatus = TEXT("Saving");
+    SessionStatus = TEXT("Ending");
+    NotifyDebugStateChanged();
+
+    UE_LOG(LogTemp, Log, TEXT("[Backend] EndSession starting. CharacterId=%s SessionId=%s HasPosition=%s"),
+        *Snapshot.CharacterId,
+        *Snapshot.SessionId,
+        Snapshot.bHasPosition ? TEXT("true") : TEXT("false"));
+
+    TSharedPtr<TFunction<void(int32)>> SendAttempt = MakeShared<TFunction<void(int32)>>();
+    *SendAttempt = [this, Snapshot, SendAttempt](int32 Attempt)
+    {
+        TSharedRef<IHttpRequest, ESPMode::ThreadSafe> Request = FHttpModule::Get().CreateRequest();
+        Request->SetURL(BuildUrl(TEXT("/session/end")));
+        Request->SetVerb(TEXT("POST"));
+        Request->SetHeader(TEXT("Content-Type"), TEXT("application/json"));
+        ApplyAuthHeader(Request);
+        Request->SetContentAsString(BuildCharacterSavePayload(Snapshot, true));
+
+        Request->OnProcessRequestComplete().BindLambda(
+            [this, Snapshot, SendAttempt, Attempt](FHttpRequestPtr HttpRequest, FHttpResponsePtr Response, bool bWasSuccessful)
+            {
+                if (IsTransientBackendFailure(bWasSuccessful, Response) && Attempt < MaxTransientBackendRetries)
+                {
+                    RunOnGameThread([this, SendAttempt, Attempt]()
+                    {
+                        ScheduleTransientBackendRetry(this, TEXT("end session"), Attempt + 1, [SendAttempt](int32 NextAttempt)
+                        {
+                            (*SendAttempt)(NextAttempt);
+                        });
+                    });
+                    return;
+                }
+
+                if (!bWasSuccessful || !Response.IsValid())
+                {
+                    RunOnGameThread([this, Snapshot]()
+                    {
+                        SessionStatus = TEXT("EndFailed");
+                        MarkSaveFailed(TEXT("Session kapatma istegi basarisiz oldu."), nullptr, Snapshot.CharacterId);
+                        UE_LOG(LogTemp, Warning, TEXT("[Backend] EndSession request failed."));
+                    });
+                    return;
+                }
+
+                TSharedPtr<FJsonObject> JsonObject;
+                FString ErrorMessage;
+                if (!TryReadJsonResponse(Response, JsonObject, ErrorMessage))
+                {
+                    RunOnGameThread([this, ErrorMessage, Response, Snapshot]()
+                    {
+                        SessionStatus = TEXT("EndFailed");
+                        MarkSaveFailed(ErrorMessage, Response, Snapshot.CharacterId);
+                        UE_LOG(LogTemp, Warning, TEXT("[Backend] EndSession response failed: %s"), *ErrorMessage);
+                    });
+                    return;
+                }
+
+                RunOnGameThread([this, Snapshot]()
+                {
+                    CharacterStatus = TEXT("Saved");
+                    SaveStatus = TEXT("Saved");
+                    LastSaveErrorMessage.Reset();
+                    bSaveConnectionHealthy = true;
+                    SessionStatus = TEXT("Ended");
+                    LastCharacterId = Snapshot.CharacterId;
+                    SetReplicatedPersistenceStatusForCharacter(Snapshot.CharacterId, SaveStatus, FString());
+                    UE_LOG(LogTemp, Log, TEXT("[Backend] EndSession succeeded. CharacterId=%s SessionId=%s"),
+                        *Snapshot.CharacterId,
+                        *Snapshot.SessionId);
+
+                    if (LastSessionResult.CharacterId == Snapshot.CharacterId)
+                    {
+                        LastSessionResult.CharacterLevel = Snapshot.Level;
+                        LastSessionResult.CharacterExperience = Snapshot.Experience;
+                        LastSessionResult.CharacterPosition = Snapshot.Position;
+                        LastSessionResult.CurrentHealth = Snapshot.Health;
+                        LastSessionResult.MaxHealth = Snapshot.MaxHealth;
+                        LastSessionResult.CurrentMana = Snapshot.Mana;
+                        LastSessionResult.MaxMana = Snapshot.MaxMana;
+                        LastSessionResult.KillCount = Snapshot.KillCount;
+                        LastSessionResult.DeathCount = Snapshot.DeathCount;
+                    }
+
+                    NotifyDebugStateChanged();
+                });
+            }
+        );
+
+        if (!Request->ProcessRequest())
+        {
+            if (Attempt < MaxTransientBackendRetries)
+            {
+                ScheduleTransientBackendRetry(this, TEXT("end session start"), Attempt + 1, [SendAttempt](int32 NextAttempt)
+                {
+                    (*SendAttempt)(NextAttempt);
+                });
+                return;
+            }
+
+            SessionStatus = TEXT("EndFailed");
+            MarkSaveFailed(TEXT("Session kapatma istegi baslatilamadi."), nullptr, Snapshot.CharacterId);
+            UE_LOG(LogTemp, Warning, TEXT("[Backend] EndSession request could not be started."));
+        }
+    };
+
+    (*SendAttempt)(0);
 }

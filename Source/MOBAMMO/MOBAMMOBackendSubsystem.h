@@ -68,7 +68,49 @@ struct FBackendSessionResult
     FString CharacterName;
 
     UPROPERTY(BlueprintReadOnly)
+    FString CharacterClassId;
+
+    UPROPERTY(BlueprintReadOnly)
     int32 CharacterLevel = 1;
+
+    UPROPERTY(BlueprintReadOnly)
+    int32 CharacterExperience = 0;
+
+    UPROPERTY(BlueprintReadOnly)
+    FVector CharacterPosition = FVector::ZeroVector;
+
+    UPROPERTY(BlueprintReadOnly)
+    int32 CharacterPresetId = 4;
+
+    UPROPERTY(BlueprintReadOnly)
+    int32 CharacterColorIndex = 0;
+
+    UPROPERTY(BlueprintReadOnly)
+    int32 CharacterShade = 58;
+
+    UPROPERTY(BlueprintReadOnly)
+    int32 CharacterTransparent = 18;
+
+    UPROPERTY(BlueprintReadOnly)
+    int32 CharacterTextureDetail = 88;
+
+    UPROPERTY(BlueprintReadOnly)
+    float CurrentHealth = 100.0f;
+
+    UPROPERTY(BlueprintReadOnly)
+    float MaxHealth = 100.0f;
+
+    UPROPERTY(BlueprintReadOnly)
+    float CurrentMana = 50.0f;
+
+    UPROPERTY(BlueprintReadOnly)
+    float MaxMana = 50.0f;
+
+    UPROPERTY(BlueprintReadOnly)
+    int32 KillCount = 0;
+
+    UPROPERTY(BlueprintReadOnly)
+    int32 DeathCount = 0;
 
     UPROPERTY(BlueprintReadOnly)
     FString ServerHost;
@@ -150,6 +192,13 @@ public:
     void StartSessionForSelectedCharacter();
 
     UFUNCTION(BlueprintCallable, Category="Backend")
+    void ReconnectCurrentSession(APlayerController* PlayerController);
+
+    void SaveCurrentCharacterProgress(APlayerController* PlayerController);
+    void HeartbeatCurrentCharacterSession(APlayerController* PlayerController);
+    void EndCurrentCharacterSession(APlayerController* PlayerController);
+
+    UFUNCTION(BlueprintCallable, Category="Backend")
     bool TravelToSession(APlayerController* PlayerController, const FString& ConnectString);
 
     UFUNCTION(BlueprintCallable, Category="Backend")
@@ -186,7 +235,16 @@ public:
     FString GetSessionStatus() const { return SessionStatus; }
 
     UFUNCTION(BlueprintPure, Category="Backend|Debug")
+    FString GetSaveStatus() const { return SaveStatus; }
+
+    UFUNCTION(BlueprintPure, Category="Backend|Debug")
     FString GetLastErrorMessage() const { return LastErrorMessage; }
+
+    UFUNCTION(BlueprintPure, Category="Backend|Debug")
+    FString GetLastSaveErrorMessage() const { return LastSaveErrorMessage; }
+
+    UFUNCTION(BlueprintPure, Category="Backend|Debug")
+    bool IsSaveConnectionHealthy() const { return bSaveConnectionHealthy; }
 
     UFUNCTION(BlueprintPure, Category="Backend|Debug")
     FString GetLastUsername() const { return LastUsername; }
@@ -198,22 +256,35 @@ private:
     using FHttpResponseHandle = TSharedPtr<IHttpResponse, ESPMode::ThreadSafe>;
 
     FString LastAccountId;
+    FString LastAuthToken;
     FString LastCharacterId;
     FString LastSessionConnectString;
     FString LastErrorMessage;
     FString LastUsername;
     FString SelectedCharacterId;
+    FBackendSessionResult LastSessionResult;
     TArray<FBackendCharacterResult> CachedCharacters;
     FString LoginStatus;
     FString CharacterListStatus;
     FString CharacterStatus;
     FString SessionStatus;
+    FString SaveStatus;
+    FString LastSaveErrorMessage;
     bool bManualCharacterFlowPending = false;
     bool bCharacterFlowActionAuthorized = false;
+    bool bSaveConnectionHealthy = true;
+    bool bReconnectTravelPending = false;
+
+    TWeakObjectPtr<APlayerController> PendingReconnectPlayerController;
 
     FString BuildUrl(const FString& Path) const;
+    void ApplyAuthHeader(const TSharedRef<IHttpRequest, ESPMode::ThreadSafe>& Request, const FString& TokenFallback = FString()) const;
     bool TryReadJsonResponse(FHttpResponseHandle Response, TSharedPtr<FJsonObject>& OutObject, FString& OutError) const;
     FString BuildErrorMessage(FHttpResponseHandle Response, const FString& FallbackMessage) const;
+    FString BuildErrorCode(FHttpResponseHandle Response) const;
+    bool IsSessionInvalidationError(FHttpResponseHandle Response) const;
+    void MarkSaveFailed(const FString& ErrorMessage, FHttpResponseHandle Response = nullptr, const FString& CharacterId = FString());
+    void SetReplicatedPersistenceStatusForCharacter(const FString& CharacterId, const FString& Status, const FString& ErrorMessage) const;
     void NotifyDebugStateChanged();
     bool ShouldUseManualCharacterFlow() const;
     bool CanRunCharacterFlowAction(const FString& FailureMessage, FBackendRequestFailedSignature& FailureDelegate, FString& InOutStatus);

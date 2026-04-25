@@ -5,6 +5,7 @@ import { registerAuthRoutes } from "./modules/auth/routes.js";
 import { registerCharacterRoutes } from "./modules/characters/routes.js";
 import { registerPrismaPlugin } from "./plugins/prisma.js";
 import { registerHealthRoutes } from "./routes/health.js";
+import { registerSessionReaper } from "./modules/session/reaper.js";
 import { registerSessionRoutes } from "./modules/session/routes.js";
 
 export function buildApp(): FastifyInstance {
@@ -23,6 +24,7 @@ export function buildApp(): FastifyInstance {
   void app.register(registerAuthRoutes, { prefix: "/auth" });
   void app.register(registerCharacterRoutes, { prefix: "/characters" });
   void app.register(registerSessionRoutes, { prefix: "/session" });
+  void app.register(registerSessionReaper);
 
   return app;
 }

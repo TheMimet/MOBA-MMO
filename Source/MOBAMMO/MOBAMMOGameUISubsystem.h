@@ -24,6 +24,7 @@ private:
     bool CanCreateWidgets(UWorld* World) const;
     void EnsureWidgets(class APlayerController* PlayerController);
     void ReconcileSessionState(class APlayerController* PlayerController);
+    void ReconcileCommandLineAutoSession();
     void UpdateWidgetVisibility(class APlayerController* PlayerController);
 
     TSubclassOf<UMOBAMMOLoginScreenWidget> ResolveLoginWidgetClass() const;
@@ -32,6 +33,8 @@ private:
     TSubclassOf<UMOBAMMOCharacterSelectWidget> ResolveCharacterSelectWidgetClass() const;
 
     FTSTicker::FDelegateHandle TickHandle;
+    bool bAutoSessionLoginRequested = false;
+    bool bAutoSessionStartRequested = false;
 
     UPROPERTY(Transient)
     TObjectPtr<UMOBAMMOLoginScreenWidget> LoginWidget;

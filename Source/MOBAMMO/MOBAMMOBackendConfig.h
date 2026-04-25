@@ -13,4 +13,7 @@ class MOBAMMO_API UMOBAMMOBackendConfig : public UObject
 public:
     UPROPERTY(Config, EditAnywhere, BlueprintReadOnly, Category="Backend")
     FString BackendBaseUrl = TEXT("http://127.0.0.1:3000");
+
+    UPROPERTY(Config, EditAnywhere, BlueprintReadOnly, Category="Backend")
+    FString SessionServerSecret = TEXT("dev-only-change-me-mobammo-session-server-secret");
 };
