@@ -918,6 +918,20 @@ bool AMOBAMMOGameMode::CastDebugDrainSpell(AController* InstigatorController)
     return ManaRecovered > 0.0f || DrainedMana > 0.0f;
 }
 
+bool AMOBAMMOGameMode::CastDebugGrantItem(AController* InstigatorController, const FString& ItemId, int32 Quantity)
+{
+    AMOBAMMOPlayerState* InstigatorState = ResolveMOBAPlayerState(InstigatorController);
+    if (!InstigatorState || Quantity <= 0 || ItemId.IsEmpty())
+    {
+        return false;
+    }
+
+    InstigatorState->GrantItem(ItemId, Quantity);
+    PushCombatLog(FString::Printf(TEXT("%s gained %dx %s."), *InstigatorState->GetPlayerName(), Quantity, *ItemId));
+    SavePlayerProgress(InstigatorController);
+    return true;
+}
+
 void AMOBAMMOGameMode::UpdateConnectedPlayerCount()
 {
     if (AMOBAMMOGameState* MOBAGameState = GetGameState<AMOBAMMOGameState>())
@@ -1007,6 +1021,29 @@ void AMOBAMMOGameMode::ApplyPlayerSessionData(APlayerController* NewPlayerContro
     MOBAPlayerState->ApplySessionIdentity(AccountId, CharacterId, SessionId, CharacterName, ClassId, CharacterLevel);
     MOBAPlayerState->ApplyAppearanceSelection(PresetId, ColorIndex, Shade, Transparent, TextureDetail);
     MOBAPlayerState->ApplyPersistentCharacterState(CharacterExperience, SavedWorldPosition, CurrentHealth, MaxHealth, CurrentMana, MaxMana, KillCount, DeathCount);
+
+    const FString InventoryString = ReadOption(Options, TEXT("Inventory"));
+    if (!InventoryString.IsEmpty())
+    {
+        TArray<FString> ItemTokens;
+        InventoryString.ParseIntoArray(ItemTokens, TEXT(","), true);
+
+        TArray<FMOBAMMOInventoryItem> ParsedInventory;
+        for (const FString& Token : ItemTokens)
+        {
+            TArray<FString> Parts;
+            Token.ParseIntoArray(Parts, TEXT(":"), false);
+            if (Parts.Num() == 3)
+            {
+                FMOBAMMOInventoryItem NewItem;
+                NewItem.ItemId = Parts[0];
+                NewItem.Quantity = FCString::Atoi(*Parts[1]);
+                NewItem.SlotIndex = FCString::Atoi(*Parts[2]);
+                ParsedInventory.Add(NewItem);
+            }
+        }
+        MOBAPlayerState->ApplyPersistentInventory(ParsedInventory);
+    }
 }
 
 AMOBAMMOPlayerState* AMOBAMMOGameMode::ResolveMOBAPlayerState(AController* Controller) const

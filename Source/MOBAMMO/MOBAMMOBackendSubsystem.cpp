@@ -76,6 +76,7 @@ namespace
         int32 KillCount = 0;
         int32 DeathCount = 0;
         int64 SaveSequence = 0;
+        TArray<FMOBAMMOInventoryItem> InventoryItems;
     };
 
     bool TryBuildCharacterSaveSnapshot(APlayerController* PlayerController, FCharacterSaveSnapshot& OutSnapshot, FString& OutError, bool bRequirePawn = true)
@@ -117,6 +118,7 @@ namespace
         OutSnapshot.MaxMana = PlayerState->GetMaxMana();
         OutSnapshot.KillCount = PlayerState->GetKills();
         OutSnapshot.DeathCount = PlayerState->GetDeaths();
+        OutSnapshot.InventoryItems = PlayerState->GetInventoryItems();
 
         const FDateTime SnapshotUtc = FDateTime::UtcNow();
         OutSnapshot.SaveSequence = (SnapshotUtc.ToUnixTimestamp() * 1000LL) + SnapshotUtc.GetMillisecond();
@@ -132,8 +134,22 @@ namespace
             ? FString::Printf(TEXT("\"position\":{\"x\":%.3f,\"y\":%.3f,\"z\":%.3f},"), Snapshot.Position.X, Snapshot.Position.Y, Snapshot.Position.Z)
             : FString();
 
+        FString InventoryJson = TEXT("\"inventory\":[");
+        for (int32 i = 0; i < Snapshot.InventoryItems.Num(); ++i)
+        {
+            const FMOBAMMOInventoryItem& Item = Snapshot.InventoryItems[i];
+            InventoryJson += FString::Printf(
+                TEXT("{\"itemId\":\"%s\",\"quantity\":%d,\"slotIndex\":%d}%s"),
+                *Item.ItemId.ReplaceCharWithEscapedChar(),
+                Item.Quantity,
+                Item.SlotIndex,
+                (i < Snapshot.InventoryItems.Num() - 1) ? TEXT(",") : TEXT("")
+            );
+        }
+        InventoryJson += TEXT("]");
+
         return FString::Printf(
-            TEXT("{%s\"sessionId\":\"%s\",%s\"level\":%d,\"experience\":%d,\"hp\":%.3f,\"maxHp\":%.3f,\"mana\":%.3f,\"maxMana\":%.3f,\"killCount\":%d,\"deathCount\":%d,\"saveSequence\":%lld}"),
+            TEXT("{%s\"sessionId\":\"%s\",%s\"level\":%d,\"experience\":%d,\"hp\":%.3f,\"maxHp\":%.3f,\"mana\":%.3f,\"maxMana\":%.3f,\"killCount\":%d,\"deathCount\":%d,\"saveSequence\":%lld,%s}"),
             *CharacterField,
             *Snapshot.SessionId.ReplaceCharWithEscapedChar(),
             *PositionField,
@@ -145,7 +161,8 @@ namespace
             Snapshot.MaxMana,
             Snapshot.KillCount,
             Snapshot.DeathCount,
-            Snapshot.SaveSequence
+            Snapshot.SaveSequence,
+            *InventoryJson
         );
     }
 
@@ -311,6 +328,9 @@ void UMOBAMMOBackendSubsystem::MockLogin(const FString& Username)
 
     LastUsername = TrimmedUsername;
     LastErrorMessage.Reset();
+    bManualCharacterFlowPending = false;
+    bMainMenuVisible = false;
+    bCharacterSelectRequested = false;
     LoginStatus = TEXT("LoggingIn");
     NotifyDebugStateChanged();
     const FString LoginUrl = BuildUrl(TEXT("/auth/login"));
@@ -376,6 +396,8 @@ void UMOBAMMOBackendSubsystem::MockLogin(const FString& Username)
                 LoginStatus = TEXT("Succeeded");
                 bManualCharacterFlowPending = ShouldUseManualCharacterFlow();
                 bCharacterFlowActionAuthorized = false;
+                bMainMenuVisible = bManualCharacterFlowPending;
+                bCharacterSelectRequested = false;
                 NotifyDebugStateChanged();
                 OnLoginSucceeded.Broadcast(Result);
                 if (bManualCharacterFlowPending)
@@ -520,6 +542,8 @@ void UMOBAMMOBackendSubsystem::CreateCharacter(const FString& AccountId, const F
 
 void UMOBAMMOBackendSubsystem::CreateCharacterForCurrentAccount(const FString& CharacterName, const FString& ClassId, int32 PresetId, int32 ColorIndex, int32 Shade, int32 Transparent, int32 TextureDetail)
 {
+    bMainMenuVisible = false;
+    bCharacterSelectRequested = true;
     bCharacterFlowActionAuthorized = true;
     CreateCharacter(LastAccountId, CharacterName, ClassId, PresetId, ColorIndex, Shade, Transparent, TextureDetail);
 }
@@ -767,6 +791,23 @@ void UMOBAMMOBackendSubsystem::StartSession(const FString& CharacterId)
                     Result.KillCount = ReadOptionalJsonInt(*StatsObject, TEXT("killCount"), Result.KillCount);
                     Result.DeathCount = ReadOptionalJsonInt(*StatsObject, TEXT("deathCount"), Result.DeathCount);
                 }
+
+                const TArray<TSharedPtr<FJsonValue>>* InventoryArray = nullptr;
+                if ((*CharacterSnapshotObject)->TryGetArrayField(TEXT("inventory"), InventoryArray) && InventoryArray)
+                {
+                    for (const TSharedPtr<FJsonValue>& ItemValue : *InventoryArray)
+                    {
+                        const TSharedPtr<FJsonObject>* ItemObject = nullptr;
+                        if (ItemValue.IsValid() && ItemValue->TryGetObject(ItemObject) && ItemObject && ItemObject->IsValid())
+                        {
+                            FMOBAMMOInventoryItem InventoryItem;
+                            InventoryItem.ItemId = (*ItemObject)->GetStringField(TEXT("itemId"));
+                            InventoryItem.Quantity = ReadOptionalJsonInt(*ItemObject, TEXT("quantity"), 1);
+                            InventoryItem.SlotIndex = ReadOptionalJsonInt(*ItemObject, TEXT("slotIndex"), -1);
+                            Result.InventoryItems.Add(InventoryItem);
+                        }
+                    }
+                }
             }
 
             LastCharacterId = Result.CharacterId;
@@ -781,6 +822,8 @@ void UMOBAMMOBackendSubsystem::StartSession(const FString& CharacterId)
             {
                 bCharacterFlowActionAuthorized = false;
                 bManualCharacterFlowPending = false;
+                bMainMenuVisible = false;
+                bCharacterSelectRequested = false;
                 SessionStatus = TEXT("Ready");
                 SaveStatus = TEXT("Ready");
                 LastSaveErrorMessage.Reset();
@@ -953,6 +996,22 @@ FString UMOBAMMOBackendSubsystem::BuildReplicatedTravelConnectString(const FStri
         AppendFloatOption(TEXT("MaxMana"), LastSessionResult.MaxMana);
         AppendIntOption(TEXT("KillCount"), LastSessionResult.KillCount);
         AppendIntOption(TEXT("DeathCount"), LastSessionResult.DeathCount);
+
+        FString InventoryString;
+        for (int32 i = 0; i < LastSessionResult.InventoryItems.Num(); ++i)
+        {
+            const FMOBAMMOInventoryItem& Item = LastSessionResult.InventoryItems[i];
+            InventoryString += FString::Printf(TEXT("%s:%d:%d%s"), *Item.ItemId, Item.Quantity, Item.SlotIndex, i < LastSessionResult.InventoryItems.Num() - 1 ? TEXT(",") : TEXT(""));
+        }
+        
+        if (!InventoryString.IsEmpty())
+        {
+            // Simple replace to avoid breaking the URL
+            InventoryString.ReplaceInline(TEXT("="), TEXT(""));
+            InventoryString.ReplaceInline(TEXT("?"), TEXT(""));
+            InventoryString.ReplaceInline(TEXT("&"), TEXT(""));
+            AppendOption(TEXT("Inventory"), InventoryString);
+        }
     }
 
     return FinalConnectString;
@@ -978,7 +1037,7 @@ void UMOBAMMOBackendSubsystem::ApplyAuthHeader(const TSharedRef<IHttpRequest, ES
     const UWorld* World = GetWorld();
     if (World && World->GetNetMode() == NM_DedicatedServer)
     {
-        const FString SessionServerSecret = GetDefault<UMOBAMMOBackendConfig>()->SessionServerSecret.TrimStartAndEnd();
+        const FString SessionServerSecret = GetDefault<UMOBAMMOBackendConfig>()->ResolveSessionServerSecret();
         if (!SessionServerSecret.IsEmpty())
         {
             Request->SetHeader(TEXT("X-Session-Server-Secret"), SessionServerSecret);
@@ -1135,6 +1194,43 @@ void UMOBAMMOBackendSubsystem::StartSessionForSelectedCharacter()
 
     bCharacterFlowActionAuthorized = true;
     StartSession(SelectedCharacterId);
+}
+
+void UMOBAMMOBackendSubsystem::OpenMainMenuCharacters()
+{
+    if (!bManualCharacterFlowPending)
+    {
+        return;
+    }
+
+    bMainMenuVisible = false;
+    bCharacterSelectRequested = true;
+    NotifyDebugStateChanged();
+}
+
+void UMOBAMMOBackendSubsystem::PlayFromMainMenu()
+{
+    if (!bManualCharacterFlowPending)
+    {
+        return;
+    }
+
+    if (CachedCharacters.Num() == 0)
+    {
+        OpenMainMenuCharacters();
+        return;
+    }
+
+    if (SelectedCharacterId.IsEmpty())
+    {
+        SelectedCharacterId = CachedCharacters[0].CharacterId;
+        LastCharacterId = SelectedCharacterId;
+    }
+
+    bCharacterSelectRequested = false;
+    bCharacterFlowActionAuthorized = true;
+    NotifyDebugStateChanged();
+    StartSessionForSelectedCharacter();
 }
 
 void UMOBAMMOBackendSubsystem::ReconnectCurrentSession(APlayerController* PlayerController)

@@ -61,6 +61,19 @@ void AMOBAMMOPlayerState::ApplyPersistentCharacterState(int32 InExperience, cons
     BroadcastStateUpdated();
 }
 
+void AMOBAMMOPlayerState::ApplyPersistentInventory(const TArray<FMOBAMMOInventoryItem>& InInventoryItems)
+{
+    if (!HasAuthority())
+    {
+        return;
+    }
+
+    InventoryArray.Items = InInventoryItems;
+    InventoryArray.MarkArrayDirty();
+    ForceNetUpdate();
+    BroadcastStateUpdated();
+}
+
 void AMOBAMMOPlayerState::ApplyAppearanceSelection(int32 InPresetId, int32 InColorIndex, int32 InShade, int32 InTransparent, int32 InTextureDetail)
 {
     if (!HasAuthority())
@@ -406,6 +419,68 @@ void AMOBAMMOPlayerState::PushIncomingCombatFeedback(const FString& InFeedbackTe
     BroadcastStateUpdated();
 }
 
+const TArray<FMOBAMMOInventoryItem>& AMOBAMMOPlayerState::GetInventoryItems() const
+{
+    return InventoryArray.Items;
+}
+
+void AMOBAMMOPlayerState::GrantItem(const FString& ItemId, int32 Quantity, int32 SlotIndex)
+{
+    if (!HasAuthority() || Quantity <= 0 || ItemId.IsEmpty())
+    {
+        return;
+    }
+
+    // Try to stack if SlotIndex is not strictly required to be empty
+    for (int32 i = 0; i < InventoryArray.Items.Num(); ++i)
+    {
+        if (InventoryArray.Items[i].ItemId == ItemId)
+        {
+            // Simple stacking without max capacity check for now
+            InventoryArray.Items[i].Quantity += Quantity;
+            InventoryArray.MarkItemDirty(InventoryArray.Items[i]);
+            ForceNetUpdate();
+            BroadcastStateUpdated();
+            return;
+        }
+    }
+
+    // Otherwise add new item
+    FMOBAMMOInventoryItem NewItem(ItemId, Quantity, SlotIndex >= 0 ? SlotIndex : InventoryArray.Items.Num());
+    InventoryArray.Items.Add(NewItem);
+    InventoryArray.MarkItemDirty(InventoryArray.Items.Last());
+    ForceNetUpdate();
+    BroadcastStateUpdated();
+}
+
+void AMOBAMMOPlayerState::RemoveItem(const FString& ItemId, int32 Quantity)
+{
+    if (!HasAuthority() || Quantity <= 0 || ItemId.IsEmpty())
+    {
+        return;
+    }
+
+    for (int32 i = 0; i < InventoryArray.Items.Num(); ++i)
+    {
+        if (InventoryArray.Items[i].ItemId == ItemId)
+        {
+            InventoryArray.Items[i].Quantity -= Quantity;
+            if (InventoryArray.Items[i].Quantity <= 0)
+            {
+                InventoryArray.Items.RemoveAt(i);
+                InventoryArray.MarkArrayDirty();
+            }
+            else
+            {
+                InventoryArray.MarkItemDirty(InventoryArray.Items[i]);
+            }
+            ForceNetUpdate();
+            BroadcastStateUpdated();
+            return;
+        }
+    }
+}
+
 void AMOBAMMOPlayerState::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const
 {
     Super::GetLifetimeReplicatedProps(OutLifetimeProps);
@@ -443,6 +518,7 @@ void AMOBAMMOPlayerState::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& 
     DOREPLIFETIME(AMOBAMMOPlayerState, IncomingCombatFeedbackText);
     DOREPLIFETIME(AMOBAMMOPlayerState, IncomingCombatFeedbackEndServerTime);
     DOREPLIFETIME(AMOBAMMOPlayerState, bIncomingCombatFeedbackHealing);
+    DOREPLIFETIME(AMOBAMMOPlayerState, InventoryArray);
 }
 
 void AMOBAMMOPlayerState::OnRep_PlayerIdentity()
@@ -466,6 +542,11 @@ void AMOBAMMOPlayerState::OnRep_TargetSelection()
 }
 
 void AMOBAMMOPlayerState::OnRep_CombatFeedback()
+{
+    BroadcastStateUpdated();
+}
+
+void AMOBAMMOPlayerState::OnRep_InventoryArray()
 {
     BroadcastStateUpdated();
 }

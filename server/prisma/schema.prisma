@@ -92,3 +92,17 @@ model QuestState {
 
   @@unique([characterId, questId])
 }
+
+model PersistenceTelemetry {
+  id                 String    @id
+  saveAccepted       Int       @default(0)
+  staleIgnored       Int       @default(0)
+  rejected           Int       @default(0)
+  timedOut           Int       @default(0)
+  reconnectAttempted Int       @default(0)
+  heartbeatAccepted  Int       @default(0)
+  sessionStarted     Int       @default(0)
+  sessionEnded       Int       @default(0)
+  lastEventAt        DateTime?
+  updatedAt          DateTime  @updatedAt
+}

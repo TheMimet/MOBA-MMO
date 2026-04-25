@@ -3,6 +3,7 @@
 #include "CoreMinimal.h"
 #include "Interfaces/IHttpResponse.h"
 #include "Subsystems/GameInstanceSubsystem.h"
+#include "MOBAMMOInventoryTypes.h"
 
 #include "MOBAMMOBackendSubsystem.generated.h"
 
@@ -113,6 +114,9 @@ struct FBackendSessionResult
     int32 DeathCount = 0;
 
     UPROPERTY(BlueprintReadOnly)
+    TArray<FMOBAMMOInventoryItem> InventoryItems;
+
+    UPROPERTY(BlueprintReadOnly)
     FString ServerHost;
 
     UPROPERTY(BlueprintReadOnly)
@@ -192,6 +196,12 @@ public:
     void StartSessionForSelectedCharacter();
 
     UFUNCTION(BlueprintCallable, Category="Backend")
+    void OpenMainMenuCharacters();
+
+    UFUNCTION(BlueprintCallable, Category="Backend")
+    void PlayFromMainMenu();
+
+    UFUNCTION(BlueprintCallable, Category="Backend")
     void ReconnectCurrentSession(APlayerController* PlayerController);
 
     void SaveCurrentCharacterProgress(APlayerController* PlayerController);
@@ -250,7 +260,10 @@ public:
     FString GetLastUsername() const { return LastUsername; }
 
     UFUNCTION(BlueprintPure, Category="Backend|Debug")
-    bool IsWaitingForCharacterSelection() const { return bManualCharacterFlowPending; }
+    bool IsWaitingForCharacterSelection() const { return bManualCharacterFlowPending && bCharacterSelectRequested; }
+
+    UFUNCTION(BlueprintPure, Category="Backend|Debug")
+    bool ShouldShowMainMenu() const { return bManualCharacterFlowPending && bMainMenuVisible && !bCharacterSelectRequested; }
 
 private:
     using FHttpResponseHandle = TSharedPtr<IHttpResponse, ESPMode::ThreadSafe>;
@@ -272,6 +285,8 @@ private:
     FString LastSaveErrorMessage;
     bool bManualCharacterFlowPending = false;
     bool bCharacterFlowActionAuthorized = false;
+    bool bMainMenuVisible = false;
+    bool bCharacterSelectRequested = false;
     bool bSaveConnectionHealthy = true;
     bool bReconnectTravelPending = false;
 

@@ -23,6 +23,7 @@ public class MOBAMMO : ModuleRules
                 "WebBrowserWidget",
                 "GameplayTags",
                 "GameplayTasks",
+                "NetCore",
                 "MOBAMMOAI"
             }
         );

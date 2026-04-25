@@ -2,6 +2,7 @@
 
 #include "CoreMinimal.h"
 #include "GameFramework/PlayerState.h"
+#include "MOBAMMOInventoryTypes.h"
 
 #include "MOBAMMOPlayerState.generated.h"
 
@@ -23,6 +24,9 @@ public:
 
     UFUNCTION(BlueprintCallable, Category="MOBAMMO|Replication")
     void ApplyPersistentCharacterState(int32 InExperience, const FVector& InSavedWorldPosition, float InCurrentHealth, float InMaxHealth, float InCurrentMana, float InMaxMana, int32 InKillCount, int32 InDeathCount);
+
+    UFUNCTION(BlueprintCallable, Category="MOBAMMO|Replication")
+    void ApplyPersistentInventory(const TArray<FMOBAMMOInventoryItem>& InInventoryItems);
 
     UFUNCTION(BlueprintCallable, Category="MOBAMMO|Replication")
     void ApplyAppearanceSelection(int32 InPresetId, int32 InColorIndex, int32 InShade, int32 InTransparent, int32 InTextureDetail);
@@ -210,9 +214,21 @@ public:
     UFUNCTION(BlueprintPure, Category="MOBAMMO|Replication")
     bool IsIncomingCombatFeedbackHealing() const { return bIncomingCombatFeedbackHealing; }
 
+    UFUNCTION(BlueprintPure, Category="MOBAMMO|Replication")
+    const TArray<FMOBAMMOInventoryItem>& GetInventoryItems() const;
+
+    UFUNCTION(BlueprintCallable, Category="MOBAMMO|Replication")
+    void GrantItem(const FString& ItemId, int32 Quantity, int32 SlotIndex = -1);
+
+    UFUNCTION(BlueprintCallable, Category="MOBAMMO|Replication")
+    void RemoveItem(const FString& ItemId, int32 Quantity);
+
     virtual void GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const override;
 
 protected:
+    UPROPERTY(ReplicatedUsing=OnRep_InventoryArray, BlueprintReadOnly, Category="MOBAMMO|Replication")
+    FMOBAMMOInventoryItemArray InventoryArray;
+
     UPROPERTY(ReplicatedUsing=OnRep_PlayerIdentity, BlueprintReadOnly, Category="MOBAMMO|Replication")
     FString AccountId;
 
@@ -329,6 +345,9 @@ private:
 
     UFUNCTION()
     void OnRep_CombatFeedback();
+
+    UFUNCTION()
+    void OnRep_InventoryArray();
 
     void BroadcastStateUpdated();
 };

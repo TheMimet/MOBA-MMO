@@ -9,6 +9,7 @@ class UMOBAMMOCharacterSelectWidget;
 class UMOBAMMOGameHUDWidget;
 class UMOBAMMOLoginScreenWidget;
 class UMOBAMMOLoadingScreenWidget;
+class UMOBAMMOMainMenuWidget;
 
 UCLASS()
 class MOBAMMO_API UMOBAMMOGameUISubsystem : public UGameInstanceSubsystem
@@ -18,6 +19,9 @@ class MOBAMMO_API UMOBAMMOGameUISubsystem : public UGameInstanceSubsystem
 public:
     virtual void Initialize(FSubsystemCollectionBase& Collection) override;
     virtual void Deinitialize() override;
+
+    UFUNCTION(BlueprintCallable, Category="HUD")
+    void ToggleInventory();
 
 private:
     bool Tick(float DeltaTime);
@@ -31,6 +35,7 @@ private:
     TSubclassOf<UMOBAMMOLoadingScreenWidget> ResolveLoadingWidgetClass() const;
     TSubclassOf<UMOBAMMOGameHUDWidget> ResolveHUDWidgetClass() const;
     TSubclassOf<UMOBAMMOCharacterSelectWidget> ResolveCharacterSelectWidgetClass() const;
+    TSubclassOf<UMOBAMMOMainMenuWidget> ResolveMainMenuWidgetClass() const;
 
     FTSTicker::FDelegateHandle TickHandle;
     bool bAutoSessionLoginRequested = false;
@@ -41,6 +46,9 @@ private:
 
     UPROPERTY(Transient)
     TObjectPtr<UMOBAMMOLoadingScreenWidget> LoadingWidget;
+
+    UPROPERTY(Transient)
+    TObjectPtr<UMOBAMMOMainMenuWidget> MainMenuWidget;
     
     UPROPERTY(Transient)
     TObjectPtr<UMOBAMMOCharacterSelectWidget> CharacterSelectWidget;

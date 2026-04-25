@@ -9,6 +9,7 @@
 #include "MOBAMMOPlayerState.h"
 #include "MOBAMMOTrainingDummyActor.h"
 #include "MOBAMMOTrainingMinionActor.h"
+#include "MOBAMMOGameUISubsystem.h"
 #include "EnhancedInputSubsystems.h"
 #include "InputMappingContext.h"
 
@@ -56,6 +57,16 @@ void AMOBAMMOPlayerController::PlayerTick(float DeltaTime)
 	if (WasInputKeyJustPressed(EKeys::E))
 	{
 		TriggerSelectLookTarget(true);
+	}
+	if (WasInputKeyJustPressed(EKeys::I))
+	{
+		if (UGameInstance* GameInstance = GetGameInstance())
+		{
+			if (UMOBAMMOGameUISubsystem* UISubsystem = GameInstance->GetSubsystem<UMOBAMMOGameUISubsystem>())
+			{
+				UISubsystem->ToggleInventory();
+			}
+		}
 	}
 	if (WasInputKeyJustPressed(EKeys::Six))
 	{

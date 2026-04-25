@@ -21,6 +21,7 @@
 #include "MOBAMMOPlayerController.h"
 #include "MOBAMMOPlayerState.h"
 #include "MOBAMMOTrainingMinionActor.h"
+#include "MOBAMMOInventoryWidget.h"
 #include "EngineUtils.h"
 
 // ─────────────────────────────────────────────────────────────
@@ -194,6 +195,27 @@ void UMOBAMMOGameHUDWidget::BuildLayout()
     BuildCombatLog(RootCanvas);
     BuildScoreBar(RootCanvas);
     BuildCenterNotifications(RootCanvas);
+
+    InventoryWidget = WidgetTree->ConstructWidget<UMOBAMMOInventoryWidget>(UMOBAMMOInventoryWidget::StaticClass());
+    if (InventoryWidget)
+    {
+        UCanvasPanelSlot* InvSlot = RootCanvas->AddChildToCanvas(InventoryWidget);
+        if (InvSlot)
+        {
+            InvSlot->SetAnchors(FAnchors(0.5f, 0.5f, 0.5f, 0.5f));
+            InvSlot->SetAlignment(FVector2D(0.5f, 0.5f));
+            InvSlot->SetSize(FVector2D(490.0f, 420.0f));
+            InvSlot->SetAutoSize(false);
+        }
+    }
+}
+
+void UMOBAMMOGameHUDWidget::ToggleInventory()
+{
+    if (InventoryWidget)
+    {
+        InventoryWidget->ToggleVisibility();
+    }
 }
 
 // ─────────────────────────────────────────────────────────────

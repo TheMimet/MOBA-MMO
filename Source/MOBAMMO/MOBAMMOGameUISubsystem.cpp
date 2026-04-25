@@ -11,6 +11,7 @@
 #include "MOBAMMOGameHUDWidget.h"
 #include "MOBAMMOLoginScreenWidget.h"
 #include "MOBAMMOLoadingScreenWidget.h"
+#include "MOBAMMOMainMenuWidget.h"
 #include "MOBAMMOCharacterSelectWidget.h"
 #include "UObject/SoftObjectPath.h"
 
@@ -48,6 +49,12 @@ void UMOBAMMOGameUISubsystem::Deinitialize()
         CharacterSelectWidget = nullptr;
     }
 
+    if (MainMenuWidget)
+    {
+        MainMenuWidget->RemoveFromParent();
+        MainMenuWidget = nullptr;
+    }
+
     if (LoadingWidget)
     {
         LoadingWidget->RemoveFromParent();
@@ -61,6 +68,14 @@ void UMOBAMMOGameUISubsystem::Deinitialize()
     }
 
     Super::Deinitialize();
+}
+
+void UMOBAMMOGameUISubsystem::ToggleInventory()
+{
+    if (HUDWidget)
+    {
+        HUDWidget->ToggleInventory();
+    }
 }
 
 bool UMOBAMMOGameUISubsystem::Tick(float DeltaTime)
@@ -132,6 +147,7 @@ void UMOBAMMOGameUISubsystem::EnsureWidgets(APlayerController* PlayerController)
     };
 
     ResetIfStale(LoginWidget);
+    ResetIfStale(MainMenuWidget);
     ResetIfStale(CharacterSelectWidget);
     ResetIfStale(LoadingWidget);
 
@@ -156,6 +172,15 @@ void UMOBAMMOGameUISubsystem::EnsureWidgets(APlayerController* PlayerController)
         if (CharacterSelectWidget)
         {
             CharacterSelectWidget->AddToViewport(7500);
+        }
+    }
+
+    if (!MainMenuWidget)
+    {
+        MainMenuWidget = CreateWidget<UMOBAMMOMainMenuWidget>(PlayerController, ResolveMainMenuWidgetClass());
+        if (MainMenuWidget)
+        {
+            MainMenuWidget->AddToViewport(7300);
         }
     }
 
@@ -269,6 +294,7 @@ void UMOBAMMOGameUISubsystem::UpdateWidgetVisibility(APlayerController* PlayerCo
 {
     const bool bLoadingVisible = LoadingWidget && LoadingWidget->ShouldBeVisible();
     const bool bLoginVisible = LoginWidget && LoginWidget->ShouldBeVisible();
+    const bool bMainMenuVisible = MainMenuWidget && MainMenuWidget->ShouldBeVisible();
     const bool bCharacterSelectVisible = CharacterSelectWidget && CharacterSelectWidget->ShouldBeVisible();
     const bool bHUDVisible = HUDWidget && HUDWidget->ShouldBeVisible();
 
@@ -282,6 +308,11 @@ void UMOBAMMOGameUISubsystem::UpdateWidgetVisibility(APlayerController* PlayerCo
         CharacterSelectWidget->RefreshFromBackend();
     }
 
+    if (MainMenuWidget)
+    {
+        MainMenuWidget->RefreshFromBackend();
+    }
+
     if (LoadingWidget)
     {
         LoadingWidget->RefreshFromBackend();
@@ -292,7 +323,7 @@ void UMOBAMMOGameUISubsystem::UpdateWidgetVisibility(APlayerController* PlayerCo
         HUDWidget->RefreshFromBackend();
     }
 
-    const bool bNeedsCursor = bLoginVisible || bLoadingVisible || bCharacterSelectVisible;
+    const bool bNeedsCursor = bLoginVisible || bLoadingVisible || bMainMenuVisible || bCharacterSelectVisible;
     PlayerController->SetShowMouseCursor(bNeedsCursor);
 
     if (bNeedsCursor)
@@ -330,4 +361,9 @@ TSubclassOf<UMOBAMMOCharacterSelectWidget> UMOBAMMOGameUISubsystem::ResolveChara
 {
     // Force C++ Native UI execution because WBP_CharacterSelect has old WebBrowser bindings
     return UMOBAMMOCharacterSelectWidget::StaticClass();
+}
+
+TSubclassOf<UMOBAMMOMainMenuWidget> UMOBAMMOGameUISubsystem::ResolveMainMenuWidgetClass() const
+{
+    return UMOBAMMOMainMenuWidget::StaticClass();
 }

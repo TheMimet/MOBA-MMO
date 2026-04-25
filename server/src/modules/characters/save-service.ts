@@ -21,6 +21,11 @@ export interface SaveCharacterBody {
   killCount?: number;
   deathCount?: number;
   saveSequence?: number;
+  inventory?: Array<{
+    itemId: string;
+    quantity: number;
+    slotIndex?: number;
+  }>;
 }
 
 interface SavePosition {
@@ -250,7 +255,7 @@ export async function saveCharacterState(
   }
 
   const sessionStatus = options.endSession ? SESSION_STATUS.ENDED : SESSION_STATUS.ACTIVE;
-  await prisma.$transaction([
+  const transactionOps: any[] = [
     prisma.character.update({
       where: {
         id: character.id,
@@ -294,7 +299,30 @@ export async function saveCharacterState(
         deathCount,
       },
     }),
-  ]);
+  ];
+
+  if (body.inventory) {
+    transactionOps.push(
+      prisma.inventoryItem.deleteMany({
+        where: { characterId: character.id },
+      })
+    );
+    
+    if (body.inventory.length > 0) {
+      transactionOps.push(
+        prisma.inventoryItem.createMany({
+          data: body.inventory.map((item) => ({
+            characterId: character.id,
+            itemId: item.itemId,
+            quantity: item.quantity,
+            slotIndex: item.slotIndex ?? null,
+          })),
+        })
+      );
+    }
+  }
+
+  await prisma.$transaction(transactionOps);
 
   recordPersistenceEvent("saveAccepted");
   if (options.endSession) {

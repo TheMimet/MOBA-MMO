@@ -18,6 +18,7 @@ class UVerticalBox;
 class UMOBAMMOBackendSubsystem;
 class AMOBAMMOGameState;
 class AMOBAMMOPlayerState;
+class UMOBAMMOInventoryWidget;
 
 UCLASS(BlueprintType, Blueprintable)
 class MOBAMMO_API UMOBAMMOGameHUDWidget : public UUserWidget
@@ -31,6 +32,12 @@ public:
 
     UFUNCTION(BlueprintCallable, Category="HUD")
     void RefreshFromBackend();
+
+    UFUNCTION(BlueprintCallable, Category="HUD")
+    void ToggleInventory();
+
+    // Inventory
+    UPROPERTY(Transient) TObjectPtr<UMOBAMMOInventoryWidget> InventoryWidget;
 
     UFUNCTION(BlueprintPure, Category="HUD")
     bool ShouldBeVisible() const;

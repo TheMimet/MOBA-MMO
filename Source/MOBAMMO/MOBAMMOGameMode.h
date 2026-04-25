@@ -44,10 +44,13 @@ public:
     UFUNCTION(BlueprintCallable, Category="MOBAMMO|Gameplay")
     bool CastDebugHealSpell(AController* InstigatorController);
 
-    UFUNCTION(BlueprintCallable, Category="MOBAMMO|Gameplay")
+    UFUNCTION(BlueprintCallable, Category="MOBAMMO|Debug")
     bool CastDebugDrainSpell(AController* InstigatorController);
 
-    UFUNCTION(BlueprintCallable, Category="MOBAMMO|Gameplay")
+    UFUNCTION(BlueprintCallable, Category="MOBAMMO|Debug")
+    bool CastDebugGrantItem(AController* InstigatorController, const FString& ItemId, int32 Quantity);
+
+    UFUNCTION(BlueprintCallable, Category="MOBAMMO|Debug")
     bool TriggerDebugManaRestore(AController* InstigatorController);
 
 private:
