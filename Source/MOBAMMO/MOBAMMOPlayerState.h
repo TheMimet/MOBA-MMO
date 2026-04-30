@@ -4,6 +4,7 @@
 #include "GameFramework/PlayerState.h"
 #include "MOBAMMOInventoryTypes.h"
 #include "MOBAMMOQuestTypes.h"
+#include "MOBAMMOStatusTypes.h"
 
 #include "MOBAMMOPlayerState.generated.h"
 
@@ -304,6 +305,40 @@ public:
     UFUNCTION(BlueprintPure, Category="MOBAMMO|Skills")
     bool CanUpgradeAbility(int32 SlotIndex) const;
 
+    // ── Status Effects / Buff-Debuff System ──────────────────────
+    // Server-only: applies (or refreshes) the given status effect.
+    // Shield stacks magnitude with any existing shield; all others replace same type.
+    UFUNCTION(BlueprintCallable, Category = "MOBAMMO|Status")
+    void ApplyStatusEffect(const FMOBAMMOStatusEffect& Effect);
+
+    // Server-only: removes all effects of the given type immediately.
+    UFUNCTION(BlueprintCallable, Category = "MOBAMMO|Status")
+    void RemoveStatusEffect(EMOBAMMOStatusEffectType Type);
+
+    // Returns true if at least one effect of this type is active.
+    UFUNCTION(BlueprintPure, Category = "MOBAMMO|Status")
+    bool HasStatusEffect(EMOBAMMOStatusEffectType Type) const;
+
+    // Returns true if a Silence effect is active (blocks ability use).
+    UFUNCTION(BlueprintPure, Category = "MOBAMMO|Status")
+    bool IsSilenced() const { return HasStatusEffect(EMOBAMMOStatusEffectType::Silence); }
+
+    // Returns true if a Haste effect is active.
+    UFUNCTION(BlueprintPure, Category = "MOBAMMO|Status")
+    bool IsHasted() const { return HasStatusEffect(EMOBAMMOStatusEffectType::Haste); }
+
+    // Cooldown multiplier: 0.70 while hasted, otherwise 1.0.
+    UFUNCTION(BlueprintPure, Category = "MOBAMMO|Status")
+    float GetCooldownMultiplier() const { return IsHasted() ? 0.70f : 1.0f; }
+
+    // Server-only: absorbs InDamage through the shield bubble.
+    // Depletes shield magnitude and returns the leftover damage that passes through.
+    float AbsorbShieldDamage(float InDamage);
+
+    // Read-only snapshot of all active effects (for HUD display).
+    UFUNCTION(BlueprintPure, Category = "MOBAMMO|Status")
+    const TArray<FMOBAMMOStatusEffect>& GetActiveStatusEffects() const { return ActiveStatusEffects; }
+
     // ── Quest / Objective System ──────────────────────────────────
     // Server-only: assigns default session quests to this player.
     UFUNCTION(BlueprintCallable, Category="MOBAMMO|Quest")
@@ -432,6 +467,10 @@ protected:
     UPROPERTY(ReplicatedUsing=OnRep_CombatFeedback, BlueprintReadOnly, Category="MOBAMMO|Replication")
     bool bIncomingCombatFeedbackHealing = false;
 
+    // Active status effects — replicated to the owning client only.
+    UPROPERTY(ReplicatedUsing = OnRep_StatusEffects, BlueprintReadOnly, Category = "MOBAMMO|Status")
+    TArray<FMOBAMMOStatusEffect> ActiveStatusEffects;
+
     // Quest progress — replicated to the owning client only.
     UPROPERTY(ReplicatedUsing=OnRep_QuestProgress, BlueprintReadOnly, Category="MOBAMMO|Quest")
     TArray<FMOBAMMOQuestProgress> QuestProgress;
@@ -462,6 +501,9 @@ private:
 
     UFUNCTION()
     void OnRep_InventoryArray();
+
+    UFUNCTION()
+    void OnRep_StatusEffects();
 
     UFUNCTION()
     void OnRep_QuestProgress();
