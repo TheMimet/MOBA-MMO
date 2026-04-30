@@ -149,6 +149,9 @@ private:
     UPROPERTY(Transient) TObjectPtr<UTextBlock> RespawnHintText;
     UPROPERTY(Transient) TObjectPtr<UTextBlock> ArcChargeText;
 
+    // Status effects row (below mana bar in player frame)
+    UPROPERTY(Transient) TObjectPtr<UTextBlock> StatusEffectText;
+
     // Floating damage text
     UPROPERTY(Transient) TObjectPtr<UTextBlock> FloatingFeedbackText;
 

@@ -339,6 +339,12 @@ public:
     UFUNCTION(BlueprintPure, Category = "MOBAMMO|Status")
     const TArray<FMOBAMMOStatusEffect>& GetActiveStatusEffects() const { return ActiveStatusEffects; }
 
+    // Server-only: advances all effect timers by DeltaTime.
+    // Applies HoT/DoT ticks. Removes expired effects.
+    // Populates OutHealApplied / OutDamageApplied and OutExpiredTypes for the caller to log.
+    void TickAndApplyStatusEffects(float DeltaTime, float& OutHealApplied, float& OutDamageApplied,
+                                   TArray<EMOBAMMOStatusEffectType>& OutExpiredTypes);
+
     // ── Quest / Objective System ──────────────────────────────────
     // Server-only: assigns default session quests to this player.
     UFUNCTION(BlueprintCallable, Category="MOBAMMO|Quest")

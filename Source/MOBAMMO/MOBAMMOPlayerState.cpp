@@ -985,6 +985,9 @@ void AMOBAMMOPlayerState::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& 
     // --- Owner-only: skill points and ability ranks ---
     DOREPLIFETIME_CONDITION(AMOBAMMOPlayerState, SkillPoints,                     COND_OwnerOnly);
     DOREPLIFETIME_CONDITION(AMOBAMMOPlayerState, AbilityRanks,                    COND_OwnerOnly);
+
+    // --- Owner-only: active status effects (buff/debuff display) ---
+    DOREPLIFETIME_CONDITION(AMOBAMMOPlayerState, ActiveStatusEffects,             COND_OwnerOnly);
 }
 
 void AMOBAMMOPlayerState::OnRep_PlayerIdentity()
@@ -1098,6 +1101,186 @@ TArray<FString> AMOBAMMOPlayerState::AdvanceQuestProgress(EMOBAMMOQuestType Type
 void AMOBAMMOPlayerState::OnRep_SkillProgress()
 {
     BroadcastStateUpdated();
+}
+
+void AMOBAMMOPlayerState::OnRep_StatusEffects()
+{
+    BroadcastStateUpdated();
+}
+
+// ─────────────────────────────────────────────────────────────
+// Status Effects / Buff-Debuff System
+// ─────────────────────────────────────────────────────────────
+
+void AMOBAMMOPlayerState::ApplyStatusEffect(const FMOBAMMOStatusEffect& Effect)
+{
+    if (!HasAuthority())
+    {
+        return;
+    }
+
+    if (Effect.Type == EMOBAMMOStatusEffectType::Shield)
+    {
+        // Shield stacks: add magnitude to an existing shield rather than replace.
+        for (FMOBAMMOStatusEffect& Existing : ActiveStatusEffects)
+        {
+            if (Existing.Type == EMOBAMMOStatusEffectType::Shield)
+            {
+                Existing.Magnitude        += Effect.Magnitude;
+                Existing.RemainingDuration = FMath::Max(Existing.RemainingDuration, Effect.RemainingDuration);
+                ForceNetUpdate();
+                BroadcastStateUpdated();
+                return;
+            }
+        }
+    }
+    else
+    {
+        // All other effect types replace an existing instance of the same type.
+        for (FMOBAMMOStatusEffect& Existing : ActiveStatusEffects)
+        {
+            if (Existing.Type == Effect.Type)
+            {
+                Existing = Effect;
+                ForceNetUpdate();
+                BroadcastStateUpdated();
+                return;
+            }
+        }
+    }
+
+    // No existing effect of this type — add a new entry.
+    ActiveStatusEffects.Add(Effect);
+    ForceNetUpdate();
+    BroadcastStateUpdated();
+}
+
+void AMOBAMMOPlayerState::RemoveStatusEffect(EMOBAMMOStatusEffectType Type)
+{
+    if (!HasAuthority())
+    {
+        return;
+    }
+
+    const int32 Removed = ActiveStatusEffects.RemoveAll(
+        [Type](const FMOBAMMOStatusEffect& E) { return E.Type == Type; });
+
+    if (Removed > 0)
+    {
+        ForceNetUpdate();
+        BroadcastStateUpdated();
+    }
+}
+
+bool AMOBAMMOPlayerState::HasStatusEffect(EMOBAMMOStatusEffectType Type) const
+{
+    for (const FMOBAMMOStatusEffect& E : ActiveStatusEffects)
+    {
+        if (E.Type == Type)
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
+float AMOBAMMOPlayerState::AbsorbShieldDamage(float InDamage)
+{
+    if (!HasAuthority() || InDamage <= 0.0f)
+    {
+        return InDamage;
+    }
+
+    for (int32 i = ActiveStatusEffects.Num() - 1; i >= 0; --i)
+    {
+        FMOBAMMOStatusEffect& E = ActiveStatusEffects[i];
+        if (E.Type != EMOBAMMOStatusEffectType::Shield)
+        {
+            continue;
+        }
+
+        if (E.Magnitude >= InDamage)
+        {
+            // Shield fully absorbs the hit.
+            E.Magnitude -= InDamage;
+            if (E.Magnitude <= 0.0f)
+            {
+                ActiveStatusEffects.RemoveAt(i);
+            }
+            ForceNetUpdate();
+            BroadcastStateUpdated();
+            return 0.0f;
+        }
+        else
+        {
+            // Shield partially absorbs; remainder passes through.
+            const float Remainder = InDamage - E.Magnitude;
+            ActiveStatusEffects.RemoveAt(i);
+            ForceNetUpdate();
+            BroadcastStateUpdated();
+            return Remainder;
+        }
+    }
+
+    return InDamage; // No shield active — full damage passes through.
+}
+
+void AMOBAMMOPlayerState::TickAndApplyStatusEffects(float DeltaTime,
+                                                     float& OutHealApplied,
+                                                     float& OutDamageApplied,
+                                                     TArray<EMOBAMMOStatusEffectType>& OutExpiredTypes)
+{
+    OutHealApplied   = 0.0f;
+    OutDamageApplied = 0.0f;
+    OutExpiredTypes.Reset();
+
+    if (!HasAuthority() || DeltaTime <= 0.0f)
+    {
+        return;
+    }
+
+    bool bDirty = false;
+
+    for (int32 i = ActiveStatusEffects.Num() - 1; i >= 0; --i)
+    {
+        FMOBAMMOStatusEffect& E = ActiveStatusEffects[i];
+
+        // Advance the effect's remaining duration.
+        E.RemainingDuration -= DeltaTime;
+
+        // Per-tick effects: Regeneration (HoT) and Poison (DoT).
+        if (E.Type == EMOBAMMOStatusEffectType::Regeneration || E.Type == EMOBAMMOStatusEffectType::Poison)
+        {
+            E.TimeSinceLastTick += DeltaTime;
+            if (E.TimeSinceLastTick >= E.TickInterval)
+            {
+                E.TimeSinceLastTick -= E.TickInterval;
+                if (E.Type == EMOBAMMOStatusEffectType::Regeneration)
+                {
+                    OutHealApplied += ApplyHealing(E.Magnitude);
+                }
+                else // Poison bypasses shield (already inside the body)
+                {
+                    OutDamageApplied += ApplyDamage(E.Magnitude);
+                }
+                bDirty = true;
+            }
+        }
+
+        // Remove expired effects.
+        if (E.RemainingDuration <= 0.0f)
+        {
+            OutExpiredTypes.Add(E.Type);
+            ActiveStatusEffects.RemoveAt(i);
+            bDirty = true;
+        }
+    }
+
+    if (bDirty)
+    {
+        ForceNetUpdate();
+        BroadcastStateUpdated();
+    }
 }
 
 // ─────────────────────────────────────────────────────────────

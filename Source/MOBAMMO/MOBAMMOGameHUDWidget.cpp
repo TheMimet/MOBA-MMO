@@ -443,6 +443,22 @@ void UMOBAMMOGameHUDWidget::BuildPlayerFrame(UCanvasPanel* Canvas)
             XPSlotV->SetPadding(FMargin(0.0f, 4.0f, 0.0f, 0.0f));
         }
     }
+
+    // Status effect row — small text line showing active buffs/debuffs.
+    StatusEffectText = WidgetTree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass());
+    StatusEffectText->SetColorAndOpacity(FSlateColor(FLinearColor(0.80f, 0.80f, 0.80f, 1.0f)));
+    {
+        FSlateFontInfo StatusFont = StatusEffectText->GetFont();
+        StatusFont.Size = 10;
+        StatusFont.TypefaceFontName = TEXT("Regular");
+        StatusEffectText->SetFont(StatusFont);
+    }
+    StatusEffectText->SetText(FText::GetEmpty());
+    StatusEffectText->SetVisibility(ESlateVisibility::Collapsed);
+    if (UVerticalBoxSlot* StatusSlot = Content->AddChildToVerticalBox(StatusEffectText))
+    {
+        StatusSlot->SetPadding(FMargin(0.0f, 4.0f, 0.0f, 0.0f));
+    }
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -1758,6 +1774,55 @@ void UMOBAMMOGameHUDWidget::UpdateTexts()
     if (ManaValueText)
     {
         ManaValueText->SetText(FText::FromString(FString::Printf(TEXT("%.0f / %.0f"), Mana, MaxMana)));
+    }
+
+    // ── Status Effects ──
+    if (StatusEffectText)
+    {
+        const AMOBAMMOPlayerState* PSForStatus = GetOwningPlayer()
+            ? GetOwningPlayer()->GetPlayerState<AMOBAMMOPlayerState>() : nullptr;
+
+        if (PSForStatus && PSForStatus->GetActiveStatusEffects().Num() > 0)
+        {
+            FString StatusLine;
+            for (const FMOBAMMOStatusEffect& E : PSForStatus->GetActiveStatusEffects())
+            {
+                if (!StatusLine.IsEmpty())
+                {
+                    StatusLine += TEXT("  ");
+                }
+                switch (E.Type)
+                {
+                    case EMOBAMMOStatusEffectType::Shield:
+                        StatusLine += FString::Printf(TEXT("🛡 Shield %.0f (%.0fs)"),
+                            E.Magnitude, FMath::Max(0.0f, E.RemainingDuration));
+                        break;
+                    case EMOBAMMOStatusEffectType::Regeneration:
+                        StatusLine += FString::Printf(TEXT("✦ Regen %.0f/s (%.0fs)"),
+                            E.Magnitude, FMath::Max(0.0f, E.RemainingDuration));
+                        break;
+                    case EMOBAMMOStatusEffectType::Poison:
+                        StatusLine += FString::Printf(TEXT("☠ Poison %.0f/s (%.0fs)"),
+                            E.Magnitude, FMath::Max(0.0f, E.RemainingDuration));
+                        break;
+                    case EMOBAMMOStatusEffectType::Haste:
+                        StatusLine += FString::Printf(TEXT("⚡ Haste (%.0fs)"),
+                            FMath::Max(0.0f, E.RemainingDuration));
+                        break;
+                    case EMOBAMMOStatusEffectType::Silence:
+                        StatusLine += FString::Printf(TEXT("🔇 Silence (%.0fs)"),
+                            FMath::Max(0.0f, E.RemainingDuration));
+                        break;
+                }
+            }
+            StatusEffectText->SetText(FText::FromString(StatusLine));
+            StatusEffectText->SetVisibility(ESlateVisibility::HitTestInvisible);
+        }
+        else
+        {
+            StatusEffectText->SetText(FText::GetEmpty());
+            StatusEffectText->SetVisibility(ESlateVisibility::Collapsed);
+        }
     }
 
     // ── Score Bar ──

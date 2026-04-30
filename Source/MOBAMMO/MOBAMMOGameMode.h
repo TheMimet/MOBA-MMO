@@ -113,6 +113,11 @@ private:
     void NotifyQuestEvent(AController* Controller, EMOBAMMOQuestType Type, int32 Amount = 1);
     void GrantQuestReward(AController* Controller, const FString& QuestId);
 
+    // Status effect tick loop — ticks HoT/DoT every 0.25 s
+    void StartStatusEffectTickLoop();
+    void TickAllStatusEffects();
+    void TickStatusEffectsForPlayer(AController* Controller, float DeltaTime);
+
     // Rank-scaled ability stat helpers. Rank 1 = base, each extra rank adds 20% power / -10% cooldown.
     float RankScaledPower(float BasePower, int32 Rank) const;
     float RankScaledCooldown(float BaseCooldown, int32 Rank) const;
@@ -265,4 +270,8 @@ private:
     FTimerHandle PlayerAutoSaveTimerHandle;
     FTimerHandle PlayerSessionHeartbeatTimerHandle;
     FTimerHandle ArenaSafetyTimerHandle;
+    FTimerHandle StatusEffectTickTimerHandle;
+
+    // Fixed delta used by the status effect tick timer (seconds between ticks)
+    static constexpr float StatusEffectTickInterval = 0.25f;
 };

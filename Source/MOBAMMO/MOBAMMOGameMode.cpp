@@ -192,6 +192,7 @@ void AMOBAMMOGameMode::PostLogin(APlayerController* NewPlayer)
     StartArenaSafetyLoop();
     StartPlayerAutoSaveLoop();
     StartPlayerSessionHeartbeatLoop();
+    StartStatusEffectTickLoop();
 }
 
 void AMOBAMMOGameMode::EndPlay(const EEndPlayReason::Type EndPlayReason)
@@ -656,7 +657,17 @@ bool AMOBAMMOGameMode::ApplyDamageToPlayer(AController* TargetController, float 
         return false;
     }
 
-    const bool bApplied = PlayerState->ApplyDamage(Amount) > 0.0f;
+    // Let the player's shield absorb what it can before raw damage lands.
+    const float EffectiveAmount = PlayerState->AbsorbShieldDamage(Amount);
+    if (EffectiveAmount <= 0.0f)
+    {
+        // Fully absorbed by shield — still report success so callers log the event.
+        PushCombatLog(FString::Printf(TEXT("%s's shield absorbed %.0f damage!"),
+            *PlayerState->GetPlayerName(), Amount));
+        return true;
+    }
+
+    const bool bApplied = PlayerState->ApplyDamage(EffectiveAmount) > 0.0f;
     if (bApplied)
     {
         SavePlayerProgress(TargetController);
@@ -774,6 +785,14 @@ bool AMOBAMMOGameMode::CastDebugDamageSpell(AController* InstigatorController)
         return false;
     }
     const FMOBAMMOAbilityDefinition DamageAbility = GetAbilityDefinitionForState(InstigatorState, 0, MOBAMMOAbilitySet::ArcBurst());
+
+    // Silence prevents ALL ability use.
+    if (InstigatorState->IsSilenced())
+    {
+        PushCombatLog(FString::Printf(TEXT("%s tried to cast %s but is Silenced!"),
+            *InstigatorState->GetPlayerName(), *DamageAbility.Name));
+        return false;
+    }
 
     if (IsTrainingDummySelected(InstigatorState))
     {
@@ -992,6 +1011,21 @@ bool AMOBAMMOGameMode::CastDebugDamageSpell(AController* InstigatorController)
     {
         InstigatorState->StartArcCharge(0.0f, ServerWorldTimeSeconds);
     }
+
+    // Rank 2+: apply Poison to the player target (3 damage/s for 6 s, scales with rank).
+    const int32 DmgRankPvP = InstigatorState->GetAbilityRank(0);
+    if (DmgRankPvP >= 2 && TargetState->IsAlive())
+    {
+        FMOBAMMOStatusEffect PoisonEffect;
+        PoisonEffect.Type              = EMOBAMMOStatusEffectType::Poison;
+        PoisonEffect.Magnitude         = 3.0f * (1.0f + (DmgRankPvP - 1) * 0.20f);
+        PoisonEffect.TickInterval      = 1.0f;
+        PoisonEffect.RemainingDuration = 6.0f;
+        TargetState->ApplyStatusEffect(PoisonEffect);
+        PushCombatLog(FString::Printf(TEXT("%s is poisoned! (%.0f dmg/s for 6s)"),
+            *TargetState->GetPlayerName(), PoisonEffect.Magnitude));
+    }
+
     SavePlayerProgress(InstigatorController);
     SavePlayerProgress(TargetController);
     return true;
@@ -1005,6 +1039,14 @@ bool AMOBAMMOGameMode::CastDebugHealSpell(AController* InstigatorController)
         return false;
     }
     const FMOBAMMOAbilityDefinition HealAbility = GetAbilityDefinitionForState(InstigatorState, 1, MOBAMMOAbilitySet::Renew());
+
+    // Silence prevents ALL ability use.
+    if (InstigatorState->IsSilenced())
+    {
+        PushCombatLog(FString::Printf(TEXT("%s tried to cast %s but is Silenced!"),
+            *InstigatorState->GetPlayerName(), *HealAbility.Name));
+        return false;
+    }
 
     const float ServerWorldTimeSeconds = GetWorld() ? GetWorld()->GetTimeSeconds() : 0.0f;
     const float HealCooldownRemaining = InstigatorState->GetHealCooldownRemaining(ServerWorldTimeSeconds);
@@ -1037,6 +1079,32 @@ bool AMOBAMMOGameMode::CastDebugHealSpell(AController* InstigatorController)
         InstigatorState->GetMaxHealth()
     ));
     InstigatorState->StartHealCooldown(ScaledHealCooldown, ServerWorldTimeSeconds);
+
+    // Rank 2+: also apply Regeneration (5 HP/s for 8 s scaled by rank).
+    if (HealRank >= 2)
+    {
+        FMOBAMMOStatusEffect RegenEffect;
+        RegenEffect.Type             = EMOBAMMOStatusEffectType::Regeneration;
+        RegenEffect.Magnitude        = 5.0f * (1.0f + (HealRank - 1) * 0.20f); // scales with rank
+        RegenEffect.TickInterval     = 1.0f;
+        RegenEffect.RemainingDuration = 8.0f;
+        InstigatorState->ApplyStatusEffect(RegenEffect);
+        PushCombatLog(FString::Printf(TEXT("%s gained Regeneration (%.0f HP/s for 8s)."),
+            *InstigatorState->GetPlayerName(), RegenEffect.Magnitude));
+    }
+
+    // Rank 4+: also apply a Shield bubble (absorbs 20 + 5*(rank-4) damage).
+    if (HealRank >= 4)
+    {
+        FMOBAMMOStatusEffect ShieldEffect;
+        ShieldEffect.Type             = EMOBAMMOStatusEffectType::Shield;
+        ShieldEffect.Magnitude        = 20.0f + 5.0f * (HealRank - 4);
+        ShieldEffect.RemainingDuration = 15.0f;
+        InstigatorState->ApplyStatusEffect(ShieldEffect);
+        PushCombatLog(FString::Printf(TEXT("%s gained a Shield (absorbs %.0f damage for 15s)."),
+            *InstigatorState->GetPlayerName(), ShieldEffect.Magnitude));
+    }
+
     NotifyQuestEvent(InstigatorController, EMOBAMMOQuestType::UseAbility);
     SavePlayerProgress(InstigatorController);
     return HealingApplied > 0.0f;
@@ -2007,4 +2075,134 @@ void AMOBAMMOGameMode::GrantQuestReward(AController* Controller, const FString& 
     }
 
     PushCombatLog(RewardMsg);
+}
+
+// ─────────────────────────────────────────────────────────────
+// Status Effect Tick Loop
+// ─────────────────────────────────────────────────────────────
+
+void AMOBAMMOGameMode::StartStatusEffectTickLoop()
+{
+    if (!HasAuthority())
+    {
+        return;
+    }
+
+    // Guard: don't start a second timer if one is already running.
+    if (GetWorldTimerManager().IsTimerActive(StatusEffectTickTimerHandle))
+    {
+        return;
+    }
+
+    GetWorldTimerManager().SetTimer(
+        StatusEffectTickTimerHandle,
+        this,
+        &AMOBAMMOGameMode::TickAllStatusEffects,
+        StatusEffectTickInterval,
+        /*bLoop=*/true
+    );
+}
+
+void AMOBAMMOGameMode::TickAllStatusEffects()
+{
+    if (!HasAuthority())
+    {
+        return;
+    }
+
+    for (FConstPlayerControllerIterator It = GetWorld()->GetPlayerControllerIterator(); It; ++It)
+    {
+        AController* Controller = It->Get();
+        if (Controller && HasActiveSession(Controller))
+        {
+            TickStatusEffectsForPlayer(Controller, StatusEffectTickInterval);
+        }
+    }
+}
+
+void AMOBAMMOGameMode::TickStatusEffectsForPlayer(AController* Controller, float DeltaTime)
+{
+    AMOBAMMOPlayerState* PS = ResolveMOBAPlayerState(Controller);
+    if (!PS)
+    {
+        return;
+    }
+
+    // If dead, clear all effects so they don't carry over to respawn.
+    if (!PS->IsAlive())
+    {
+        const TArray<FMOBAMMOStatusEffect> EffectsCopy = PS->GetActiveStatusEffects();
+        for (const FMOBAMMOStatusEffect& E : EffectsCopy)
+        {
+            PS->RemoveStatusEffect(E.Type);
+        }
+        return;
+    }
+
+    if (PS->GetActiveStatusEffects().Num() == 0)
+    {
+        return;
+    }
+
+    float HealApplied   = 0.0f;
+    float DamageApplied = 0.0f;
+    TArray<EMOBAMMOStatusEffectType> ExpiredTypes;
+
+    PS->TickAndApplyStatusEffects(DeltaTime, HealApplied, DamageApplied, ExpiredTypes);
+
+    // Log regeneration tick.
+    if (HealApplied > 0.0f)
+    {
+        PushCombatLog(FString::Printf(TEXT("[Regen] %s regenerated %.0f HP. HP %.0f/%.0f."),
+            *PS->GetPlayerName(), HealApplied,
+            PS->GetCurrentHealth(), PS->GetMaxHealth()));
+    }
+
+    // Log poison tick and handle possible death.
+    if (DamageApplied > 0.0f)
+    {
+        PushCombatLog(FString::Printf(TEXT("[Poison] %s took %.0f poison damage. HP %.0f/%.0f."),
+            *PS->GetPlayerName(), DamageApplied,
+            PS->GetCurrentHealth(), PS->GetMaxHealth()));
+
+        if (!PS->IsAlive())
+        {
+            PS->RecordDeath();
+            const float ServerTime = GetWorld() ? GetWorld()->GetTimeSeconds() : 0.0f;
+            PS->StartRespawnCooldown(DebugRespawnDelayDuration, ServerTime);
+            PushCombatLog(FString::Printf(TEXT("%s succumbed to poison. Reforge in %.1fs."),
+                *PS->GetPlayerName(), DebugRespawnDelayDuration));
+
+            // Clear remaining effects on death.
+            const TArray<FMOBAMMOStatusEffect> EffectsOnDeath = PS->GetActiveStatusEffects();
+            for (const FMOBAMMOStatusEffect& E : EffectsOnDeath)
+            {
+                PS->RemoveStatusEffect(E.Type);
+            }
+
+            SavePlayerProgress(Controller);
+            return;
+        }
+    }
+
+    // Log expired effects.
+    for (const EMOBAMMOStatusEffectType ExpiredType : ExpiredTypes)
+    {
+        const TCHAR* EffectName = TEXT("effect");
+        switch (ExpiredType)
+        {
+            case EMOBAMMOStatusEffectType::Shield:       EffectName = TEXT("Shield");  break;
+            case EMOBAMMOStatusEffectType::Regeneration: EffectName = TEXT("Regen");   break;
+            case EMOBAMMOStatusEffectType::Poison:       EffectName = TEXT("Poison");  break;
+            case EMOBAMMOStatusEffectType::Haste:        EffectName = TEXT("Haste");   break;
+            case EMOBAMMOStatusEffectType::Silence:      EffectName = TEXT("Silence"); break;
+        }
+        PushCombatLog(FString::Printf(TEXT("[Status] %s's %s wore off."),
+            *PS->GetPlayerName(), EffectName));
+    }
+
+    if (HealApplied > 0.0f || DamageApplied > 0.0f || ExpiredTypes.Num() > 0)
+    {
+        SavePlayerProgress(Controller);
+    }
 }
