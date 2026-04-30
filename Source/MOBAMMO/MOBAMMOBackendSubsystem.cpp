@@ -9,6 +9,8 @@
 #include "JsonObjectWrapper.h"
 #include "MOBAMMOBackendConfig.h"
 #include "MOBAMMOPlayerState.h"
+#include "Misc/CommandLine.h"
+#include "Misc/Parse.h"
 #include "Serialization/JsonReader.h"
 #include "Serialization/JsonSerializer.h"
 #include "Async/Async.h"
@@ -75,6 +77,7 @@ namespace
         float MaxMana = 50.0f;
         int32 KillCount = 0;
         int32 DeathCount = 0;
+        int32 Gold = 0;
         int64 SaveSequence = 0;
         TArray<FMOBAMMOInventoryItem> InventoryItems;
     };
@@ -113,11 +116,12 @@ namespace
         OutSnapshot.Level = PlayerState->GetCharacterLevel();
         OutSnapshot.Experience = PlayerState->GetCharacterExperience();
         OutSnapshot.Health = PlayerState->GetCurrentHealth();
-        OutSnapshot.MaxHealth = PlayerState->GetMaxHealth();
+        OutSnapshot.MaxHealth = PlayerState->GetBaseMaxHealth();
         OutSnapshot.Mana = PlayerState->GetCurrentMana();
-        OutSnapshot.MaxMana = PlayerState->GetMaxMana();
+        OutSnapshot.MaxMana = PlayerState->GetBaseMaxMana();
         OutSnapshot.KillCount = PlayerState->GetKills();
         OutSnapshot.DeathCount = PlayerState->GetDeaths();
+        OutSnapshot.Gold = PlayerState->GetGold();
         OutSnapshot.InventoryItems = PlayerState->GetInventoryItems();
 
         const FDateTime SnapshotUtc = FDateTime::UtcNow();
@@ -138,18 +142,21 @@ namespace
         for (int32 i = 0; i < Snapshot.InventoryItems.Num(); ++i)
         {
             const FMOBAMMOInventoryItem& Item = Snapshot.InventoryItems[i];
+            const FString SlotIndexJson = Item.SlotIndex >= 0
+                ? FString::FromInt(Item.SlotIndex)
+                : TEXT("null");
             InventoryJson += FString::Printf(
-                TEXT("{\"itemId\":\"%s\",\"quantity\":%d,\"slotIndex\":%d}%s"),
+                TEXT("{\"itemId\":\"%s\",\"quantity\":%d,\"slotIndex\":%s}%s"),
                 *Item.ItemId.ReplaceCharWithEscapedChar(),
                 Item.Quantity,
-                Item.SlotIndex,
+                *SlotIndexJson,
                 (i < Snapshot.InventoryItems.Num() - 1) ? TEXT(",") : TEXT("")
             );
         }
         InventoryJson += TEXT("]");
 
         return FString::Printf(
-            TEXT("{%s\"sessionId\":\"%s\",%s\"level\":%d,\"experience\":%d,\"hp\":%.3f,\"maxHp\":%.3f,\"mana\":%.3f,\"maxMana\":%.3f,\"killCount\":%d,\"deathCount\":%d,\"saveSequence\":%lld,%s}"),
+            TEXT("{%s\"sessionId\":\"%s\",%s\"level\":%d,\"experience\":%d,\"hp\":%.3f,\"maxHp\":%.3f,\"mana\":%.3f,\"maxMana\":%.3f,\"killCount\":%d,\"deathCount\":%d,\"gold\":%d,\"saveSequence\":%lld,%s}"),
             *CharacterField,
             *Snapshot.SessionId.ReplaceCharWithEscapedChar(),
             *PositionField,
@@ -161,6 +168,7 @@ namespace
             Snapshot.MaxMana,
             Snapshot.KillCount,
             Snapshot.DeathCount,
+            Snapshot.Gold,
             Snapshot.SaveSequence,
             *InventoryJson
         );
@@ -309,6 +317,25 @@ bool UMOBAMMOBackendSubsystem::CanRunCharacterFlowAction(const FString& FailureM
 
 void UMOBAMMOBackendSubsystem::MockLogin(const FString& Username)
 {
+    const bool bLegacyMockLoginAllowed =
+        FParse::Param(FCommandLine::Get(), TEXT("MOBAMMOAutoSession")) ||
+        FParse::Param(FCommandLine::Get(), TEXT("MOBAMMOAllowLegacyMockLogin"));
+    if (!bLegacyMockLoginAllowed)
+    {
+        UE_LOG(LogTemp, Warning, TEXT("[Backend] Legacy MockLogin blocked. Login must come from WebUI or -MOBAMMOAutoSession."));
+        return;
+    }
+
+    RunLoginRequest(Username);
+}
+
+void UMOBAMMOBackendSubsystem::LoginFromWebUI(const FString& Username)
+{
+    RunLoginRequest(Username);
+}
+
+void UMOBAMMOBackendSubsystem::RunLoginRequest(const FString& Username)
+{
     if (ShouldSkipAutomaticBackendBootstrap(this))
     {
         UE_LOG(LogTemp, Log, TEXT("[Backend] MockLogin skipped because world is already a network client."));
@@ -396,8 +423,8 @@ void UMOBAMMOBackendSubsystem::MockLogin(const FString& Username)
                 LoginStatus = TEXT("Succeeded");
                 bManualCharacterFlowPending = ShouldUseManualCharacterFlow();
                 bCharacterFlowActionAuthorized = false;
-                bMainMenuVisible = bManualCharacterFlowPending;
-                bCharacterSelectRequested = false;
+                bMainMenuVisible = false;
+                bCharacterSelectRequested = bManualCharacterFlowPending;
                 NotifyDebugStateChanged();
                 OnLoginSucceeded.Broadcast(Result);
                 if (bManualCharacterFlowPending)
@@ -790,6 +817,7 @@ void UMOBAMMOBackendSubsystem::StartSession(const FString& CharacterId)
                     Result.MaxMana = ReadOptionalJsonFloat(*StatsObject, TEXT("maxMana"), Result.MaxMana);
                     Result.KillCount = ReadOptionalJsonInt(*StatsObject, TEXT("killCount"), Result.KillCount);
                     Result.DeathCount = ReadOptionalJsonInt(*StatsObject, TEXT("deathCount"), Result.DeathCount);
+                    Result.Gold = ReadOptionalJsonInt(*StatsObject, TEXT("gold"), Result.Gold);
                 }
 
                 const TArray<TSharedPtr<FJsonValue>>* InventoryArray = nullptr;
@@ -889,17 +917,26 @@ bool UMOBAMMOBackendSubsystem::TravelToSession(APlayerController* PlayerControll
         return true;
     }
 
+    const UWorld* World = GetWorld();
+    const bool bForceDedicatedSessionServer = FParse::Param(FCommandLine::Get(), TEXT("MOBAMMOUseDedicatedSessionServer"));
+    const bool bUseLocalSessionTravel = World && World->GetNetMode() == NM_Standalone && !bForceDedicatedSessionServer;
+    const FString TravelTarget = bUseLocalSessionTravel ? BuildLocalSessionTravelUrl() : FinalConnectString;
+
+    UE_LOG(LogTemp, Log, TEXT("[Backend] TravelToSession mode=%s target=%s"),
+        bUseLocalSessionTravel ? TEXT("LocalStandalone") : TEXT("DedicatedServer"),
+        *TravelTarget);
+
     LastSessionConnectString = FinalConnectString;
-    SessionStatus = TEXT("Traveling");
+    SessionStatus = bUseLocalSessionTravel ? TEXT("Active") : TEXT("Traveling");
     NotifyDebugStateChanged();
-    PlayerController->ClientTravel(BuildReplicatedTravelConnectString(FinalConnectString), TRAVEL_Absolute);
+    PlayerController->ClientTravel(BuildReplicatedTravelConnectString(TravelTarget.IsEmpty() ? FinalConnectString : TravelTarget), TRAVEL_Absolute);
     return true;
 }
 
 void UMOBAMMOBackendSubsystem::NotifyClientEnteredSessionWorld()
 {
     const UWorld* World = GetWorld();
-    if (!World || World->GetNetMode() != NM_Client)
+    if (!World || (World->GetNetMode() != NM_Client && World->GetNetMode() != NM_Standalone))
     {
         return;
     }
@@ -996,6 +1033,7 @@ FString UMOBAMMOBackendSubsystem::BuildReplicatedTravelConnectString(const FStri
         AppendFloatOption(TEXT("MaxMana"), LastSessionResult.MaxMana);
         AppendIntOption(TEXT("KillCount"), LastSessionResult.KillCount);
         AppendIntOption(TEXT("DeathCount"), LastSessionResult.DeathCount);
+        AppendIntOption(TEXT("Gold"), LastSessionResult.Gold);
 
         FString InventoryString;
         for (int32 i = 0; i < LastSessionResult.InventoryItems.Num(); ++i)
@@ -1020,6 +1058,22 @@ FString UMOBAMMOBackendSubsystem::BuildReplicatedTravelConnectString(const FStri
 FString UMOBAMMOBackendSubsystem::BuildUrl(const FString& Path) const
 {
     return FString::Printf(TEXT("%s%s"), *GetBackendBaseUrl(), *Path);
+}
+
+FString UMOBAMMOBackendSubsystem::BuildLocalSessionTravelUrl() const
+{
+    FString MapName = LastSessionResult.MapName.TrimStartAndEnd();
+    if (MapName.IsEmpty())
+    {
+        MapName = TEXT("/Game/ThirdPerson/Lvl_ThirdPerson");
+    }
+
+    if (!MapName.Contains(TEXT("?game=")))
+    {
+        MapName += TEXT("?game=/Script/MOBAMMO.MOBAMMOGameMode");
+    }
+
+    return MapName;
 }
 
 void UMOBAMMOBackendSubsystem::ApplyAuthHeader(const TSharedRef<IHttpRequest, ESPMode::ThreadSafe>& Request, const FString& TokenFallback) const
@@ -1280,7 +1334,8 @@ void UMOBAMMOBackendSubsystem::SaveCurrentCharacterProgress(APlayerController* P
 {
     FCharacterSaveSnapshot Snapshot;
     FString SnapshotError;
-    if (!TryBuildCharacterSaveSnapshot(PlayerController, Snapshot, SnapshotError))
+    // bRequirePawn=false: save works even when pawn is null (dead/respawning); position is omitted from payload
+    if (!TryBuildCharacterSaveSnapshot(PlayerController, Snapshot, SnapshotError, false))
     {
         MarkSaveFailed(SnapshotError);
         return;
@@ -1356,6 +1411,8 @@ void UMOBAMMOBackendSubsystem::SaveCurrentCharacterProgress(APlayerController* P
                         LastSessionResult.MaxMana = Snapshot.MaxMana;
                         LastSessionResult.KillCount = Snapshot.KillCount;
                         LastSessionResult.DeathCount = Snapshot.DeathCount;
+                        LastSessionResult.Gold = Snapshot.Gold;
+                        LastSessionResult.InventoryItems = Snapshot.InventoryItems;
                     }
 
                     NotifyDebugStateChanged();
@@ -1572,6 +1629,8 @@ void UMOBAMMOBackendSubsystem::EndCurrentCharacterSession(APlayerController* Pla
                         LastSessionResult.MaxMana = Snapshot.MaxMana;
                         LastSessionResult.KillCount = Snapshot.KillCount;
                         LastSessionResult.DeathCount = Snapshot.DeathCount;
+                        LastSessionResult.Gold = Snapshot.Gold;
+                        LastSessionResult.InventoryItems = Snapshot.InventoryItems;
                     }
 
                     NotifyDebugStateChanged();
@@ -1597,4 +1656,47 @@ void UMOBAMMOBackendSubsystem::EndCurrentCharacterSession(APlayerController* Pla
     };
 
     (*SendAttempt)(0);
+}
+
+void UMOBAMMOBackendSubsystem::ReturnToCharacterSelectAfterDisconnect(APlayerController* PlayerController)
+{
+    FString CurrentCharacterId;
+    if (const AMOBAMMOPlayerState* PlayerState = PlayerController ? PlayerController->GetPlayerState<AMOBAMMOPlayerState>() : nullptr)
+    {
+        CurrentCharacterId = PlayerState->GetCharacterId().TrimStartAndEnd();
+    }
+
+    if (!CurrentCharacterId.IsEmpty())
+    {
+        const bool bCharacterStillCached = CachedCharacters.ContainsByPredicate([&CurrentCharacterId](const FBackendCharacterResult& Character)
+        {
+            return Character.CharacterId == CurrentCharacterId;
+        });
+
+        if (bCharacterStillCached)
+        {
+            SelectedCharacterId = CurrentCharacterId;
+            LastCharacterId = CurrentCharacterId;
+        }
+    }
+
+    LastErrorMessage.Reset();
+    LastSaveErrorMessage.Reset();
+    LastSessionConnectString.Reset();
+    LastSessionResult = FBackendSessionResult();
+    bReconnectTravelPending = false;
+    PendingReconnectPlayerController.Reset();
+    bCharacterFlowActionAuthorized = false;
+    bManualCharacterFlowPending = !LastAccountId.TrimStartAndEnd().IsEmpty();
+    bMainMenuVisible = false;
+    bCharacterSelectRequested = bManualCharacterFlowPending;
+    SessionStatus = TEXT("Ended");
+    SaveStatus = TEXT("Ready");
+    CharacterStatus = TEXT("Idle");
+
+    UE_LOG(LogTemp, Log, TEXT("[Backend] Returned to character select after disconnect. AccountId=%s SelectedCharacterId=%s"),
+        *LastAccountId,
+        *SelectedCharacterId);
+
+    NotifyDebugStateChanged();
 }

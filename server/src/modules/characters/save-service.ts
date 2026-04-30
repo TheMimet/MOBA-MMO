@@ -4,6 +4,7 @@ import { PERSISTENCE_ERROR, SAVE_RESPONSE_STATUS, SESSION_STATUS } from "../pers
 import { recordPersistenceEvent } from "../persistence/telemetry.js";
 import { DEFAULT_SESSION_TIMEOUT_SECONDS, getSessionTimeoutMs, isSessionExpired } from "../session/policy.js";
 import { clampToArenaBounds, isInsideArenaBounds } from "../arena/bounds.js";
+import { getItem } from "../inventory/itemDefinitions.js";
 
 export interface SaveCharacterBody {
   sessionId?: string;
@@ -20,11 +21,12 @@ export interface SaveCharacterBody {
   experience?: number;
   killCount?: number;
   deathCount?: number;
+  gold?: number;
   saveSequence?: number;
   inventory?: Array<{
     itemId: string;
     quantity: number;
-    slotIndex?: number;
+    slotIndex?: number | null;
   }>;
 }
 
@@ -92,6 +94,49 @@ function getDistance(from: SavePosition, to: SavePosition): number {
 function getMovementAllowance(lastSavedAt: Date): number {
   const elapsedSeconds = Math.max(0, (Date.now() - lastSavedAt.getTime()) / 1000);
   return BASE_SAVE_MOVEMENT_ALLOWANCE + elapsedSeconds * SAVE_MOVEMENT_ALLOWANCE_PER_SECOND;
+}
+
+function normalizeInventoryForSave(body: SaveCharacterBody): Array<{ itemId: string; quantity: number; slotIndex: number | null }> | undefined {
+  if (!body.inventory) {
+    return undefined;
+  }
+
+  const equippedSlots = new Set<number>();
+  const normalizedItems: Array<{ itemId: string; quantity: number; slotIndex: number | null }> = [];
+
+  for (const item of body.inventory) {
+    const itemId = typeof item.itemId === "string" ? item.itemId.trim() : "";
+    const definition = getItem(itemId);
+    if (!definition || !Number.isFinite(item.quantity)) {
+      continue;
+    }
+
+    const quantity = Math.trunc(item.quantity);
+    if (quantity < 1) {
+      continue;
+    }
+
+    let slotIndex: number | null = null;
+    if (typeof item.slotIndex === "number" && Number.isFinite(item.slotIndex)) {
+      const incomingSlotIndex = Math.trunc(item.slotIndex);
+      if (
+        incomingSlotIndex >= 0 &&
+        definition.equipSlot === incomingSlotIndex &&
+        !equippedSlots.has(incomingSlotIndex)
+      ) {
+        slotIndex = incomingSlotIndex;
+        equippedSlots.add(incomingSlotIndex);
+      }
+    }
+
+    normalizedItems.push({
+      itemId,
+      quantity: Math.min(quantity, definition.maxStack),
+      slotIndex,
+    });
+  }
+
+  return normalizedItems;
 }
 
 export async function saveCharacterState(
@@ -216,6 +261,7 @@ export async function saveCharacterState(
   const maxMana = body.maxMana ?? character.stats?.maxMana ?? 50;
   const killCount = body.killCount ?? character.stats?.killCount ?? 0;
   const deathCount = body.deathCount ?? character.stats?.deathCount ?? 0;
+  const gold = body.gold ?? character.stats?.gold ?? 0;
   const incomingSaveSequence = Number.isFinite(body.saveSequence)
     ? BigInt(Math.trunc(body.saveSequence ?? 0))
     : character.saveSequence + 1n;
@@ -288,6 +334,7 @@ export async function saveCharacterState(
         maxMana,
         killCount,
         deathCount,
+        gold,
       },
       create: {
         characterId: character.id,
@@ -297,25 +344,27 @@ export async function saveCharacterState(
         maxMana,
         killCount,
         deathCount,
+        gold,
       },
     }),
   ];
 
-  if (body.inventory) {
+  const normalizedInventory = normalizeInventoryForSave(body);
+  if (normalizedInventory) {
     transactionOps.push(
       prisma.inventoryItem.deleteMany({
         where: { characterId: character.id },
       })
     );
     
-    if (body.inventory.length > 0) {
+    if (normalizedInventory.length > 0) {
       transactionOps.push(
         prisma.inventoryItem.createMany({
-          data: body.inventory.map((item) => ({
+          data: normalizedInventory.map((item) => ({
             characterId: character.id,
             itemId: item.itemId,
             quantity: item.quantity,
-            slotIndex: item.slotIndex ?? null,
+            slotIndex: item.slotIndex,
           })),
         })
       );

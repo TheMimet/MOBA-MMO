@@ -1,8 +1,14 @@
 #include "MOBAMMOMainMenuWidget.h"
 
 #include "Blueprint/WidgetTree.h"
+#include "Components/Border.h"
+#include "Components/Button.h"
 #include "Components/Overlay.h"
 #include "Components/OverlaySlot.h"
+#include "Components/SizeBox.h"
+#include "Components/TextBlock.h"
+#include "Components/VerticalBox.h"
+#include "Components/VerticalBoxSlot.h"
 #include "Dom/JsonObject.h"
 #include "GameFramework/PlayerController.h"
 #include "Kismet/KismetSystemLibrary.h"
@@ -41,6 +47,7 @@ void UMOBAMMOMainMenuWidget::RefreshFromBackend()
 {
     PushStateToWebUI();
     SetVisibility(ShouldBeVisible() ? ESlateVisibility::Visible : ESlateVisibility::Collapsed);
+    UpdateNativeFallback();
 }
 
 bool UMOBAMMOMainMenuWidget::ShouldBeVisible() const
@@ -92,8 +99,15 @@ void UMOBAMMOMainMenuWidget::BuildLayout()
     UOverlay* RootOverlay = WidgetTree->ConstructWidget<UOverlay>(UOverlay::StaticClass());
     WidgetTree->RootWidget = RootOverlay;
 
+    UBorder* LoadingBackdrop = WidgetTree->ConstructWidget<UBorder>(UBorder::StaticClass());
+    LoadingBackdrop->SetBrushColor(FLinearColor(0.005f, 0.006f, 0.010f, 1.0f));
+    if (UOverlaySlot* BackdropSlot = RootOverlay->AddChildToOverlay(LoadingBackdrop))
+    {
+        BackdropSlot->SetHorizontalAlignment(HAlign_Fill);
+        BackdropSlot->SetVerticalAlignment(VAlign_Fill);
+    }
+
     WebBrowserWidget = WidgetTree->ConstructWidget<UWebBrowser>(UWebBrowser::StaticClass());
-    WebBrowserWidget->LoadURL(WebUIBaseUrl + TEXT("/main-menu"));
     WebBrowserWidget->OnConsoleMessage.AddDynamic(this, &UMOBAMMOMainMenuWidget::HandleConsoleMessage);
 
     if (UOverlaySlot* BrowserSlot = RootOverlay->AddChildToOverlay(WebBrowserWidget))
@@ -101,6 +115,76 @@ void UMOBAMMOMainMenuWidget::BuildLayout()
         BrowserSlot->SetHorizontalAlignment(HAlign_Fill);
         BrowserSlot->SetVerticalAlignment(VAlign_Fill);
     }
+
+    WebBrowserWidget->LoadURL(WebUIBaseUrl + TEXT("/main-menu"));
+
+    NativeFallbackPanel = WidgetTree->ConstructWidget<UBorder>(UBorder::StaticClass());
+    NativeFallbackPanel->SetBrushColor(FLinearColor(0.018f, 0.020f, 0.028f, 0.96f));
+    NativeFallbackPanel->SetPadding(FMargin(30.0f, 26.0f));
+
+    UVerticalBox* PanelContent = WidgetTree->ConstructWidget<UVerticalBox>(UVerticalBox::StaticClass());
+    NativeFallbackPanel->SetContent(PanelContent);
+
+    UTextBlock* TitleText = WidgetTree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass());
+    TitleText->SetText(FText::FromString(TEXT("Arena Gate")));
+    TitleText->SetColorAndOpacity(FSlateColor(FLinearColor(0.94f, 0.88f, 0.70f, 1.0f)));
+    TitleText->SetJustification(ETextJustify::Center);
+    FSlateFontInfo TitleFont = TitleText->GetFont();
+    TitleFont.Size = 28;
+    TitleFont.TypefaceFontName = TEXT("Bold");
+    TitleText->SetFont(TitleFont);
+    PanelContent->AddChildToVerticalBox(TitleText);
+
+    NativeFallbackStatusText = WidgetTree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass());
+    NativeFallbackStatusText->SetText(FText::FromString(TEXT("Main menu WebUI is loading. Native menu is available.")));
+    NativeFallbackStatusText->SetColorAndOpacity(FSlateColor(FLinearColor(0.72f, 0.78f, 0.88f, 1.0f)));
+    NativeFallbackStatusText->SetAutoWrapText(true);
+    NativeFallbackStatusText->SetJustification(ETextJustify::Center);
+    if (UVerticalBoxSlot* StatusSlot = PanelContent->AddChildToVerticalBox(NativeFallbackStatusText))
+    {
+        StatusSlot->SetPadding(FMargin(0.0f, 10.0f, 0.0f, 18.0f));
+    }
+
+    auto MakeFallbackButton = [this, PanelContent](const FString& Label, const FLinearColor& Color) -> UButton*
+    {
+        UButton* Button = WidgetTree->ConstructWidget<UButton>(UButton::StaticClass());
+        Button->SetBackgroundColor(Color);
+        UTextBlock* ButtonText = WidgetTree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass());
+        ButtonText->SetText(FText::FromString(Label));
+        ButtonText->SetColorAndOpacity(FSlateColor(FLinearColor::White));
+        ButtonText->SetJustification(ETextJustify::Center);
+        FSlateFontInfo ButtonFont = ButtonText->GetFont();
+        ButtonFont.Size = 16;
+        ButtonFont.TypefaceFontName = TEXT("Bold");
+        ButtonText->SetFont(ButtonFont);
+        Button->AddChild(ButtonText);
+        if (UVerticalBoxSlot* ButtonSlot = PanelContent->AddChildToVerticalBox(Button))
+        {
+            ButtonSlot->SetPadding(FMargin(0.0f, 5.0f));
+            ButtonSlot->SetHorizontalAlignment(HAlign_Fill);
+        }
+        return Button;
+    };
+
+    NativePlayButton = MakeFallbackButton(TEXT("Play"), FLinearColor(0.16f, 0.36f, 0.24f, 1.0f));
+    NativeCharactersButton = MakeFallbackButton(TEXT("Characters"), FLinearColor(0.18f, 0.27f, 0.44f, 1.0f));
+    UButton* NativeQuitButton = MakeFallbackButton(TEXT("Quit"), FLinearColor(0.34f, 0.12f, 0.13f, 1.0f));
+
+    NativePlayButton->OnClicked.AddDynamic(this, &UMOBAMMOMainMenuWidget::HandleNativePlayClicked);
+    NativeCharactersButton->OnClicked.AddDynamic(this, &UMOBAMMOMainMenuWidget::HandleNativeCharactersClicked);
+    NativeQuitButton->OnClicked.AddDynamic(this, &UMOBAMMOMainMenuWidget::HandleNativeQuitClicked);
+
+    USizeBox* PanelSizeBox = WidgetTree->ConstructWidget<USizeBox>(USizeBox::StaticClass());
+    PanelSizeBox->SetWidthOverride(420.0f);
+    PanelSizeBox->SetContent(NativeFallbackPanel);
+    if (UOverlaySlot* FallbackSlot = RootOverlay->AddChildToOverlay(PanelSizeBox))
+    {
+        FallbackSlot->SetHorizontalAlignment(HAlign_Center);
+        FallbackSlot->SetVerticalAlignment(VAlign_Center);
+        FallbackSlot->SetPadding(FMargin(24.0f));
+    }
+
+    UpdateNativeFallback();
 }
 
 void UMOBAMMOMainMenuWidget::BindToSubsystem(UMOBAMMOBackendSubsystem* BackendSubsystem)
@@ -178,12 +262,48 @@ void UMOBAMMOMainMenuWidget::PushStateToWebUI()
     WebBrowserWidget->ExecuteJavascript(Script);
 }
 
+void UMOBAMMOMainMenuWidget::UpdateNativeFallback()
+{
+    if (NativeFallbackPanel)
+    {
+        NativeFallbackPanel->SetVisibility(ESlateVisibility::Collapsed);
+    }
+    if (WebBrowserWidget)
+    {
+        WebBrowserWidget->SetVisibility(ESlateVisibility::Visible);
+    }
+
+    const UMOBAMMOBackendSubsystem* BackendSubsystem = GetBackendSubsystem();
+    const FString SessionStatus = BackendSubsystem ? BackendSubsystem->GetSessionStatus() : TEXT("Idle");
+    const bool bBusy = SessionStatus == TEXT("Starting") || SessionStatus == TEXT("Traveling")
+        || (BackendSubsystem && BackendSubsystem->GetCharacterListStatus() == TEXT("Loading"));
+    if (NativePlayButton)
+    {
+        NativePlayButton->SetIsEnabled(!bBusy);
+    }
+    if (NativeCharactersButton)
+    {
+        NativeCharactersButton->SetIsEnabled(!bBusy);
+    }
+    if (NativeFallbackStatusText)
+    {
+        const int32 CharacterCount = BackendSubsystem ? BackendSubsystem->GetCachedCharacters().Num() : 0;
+        FString StatusLine = FString::Printf(TEXT("Web main menu is still loading. Characters: %d | Session: %s"), CharacterCount, *SessionStatus);
+        if (BackendSubsystem && !BackendSubsystem->GetLastErrorMessage().IsEmpty())
+        {
+            StatusLine += FString::Printf(TEXT("\nLast error: %s"), *BackendSubsystem->GetLastErrorMessage());
+        }
+        NativeFallbackStatusText->SetText(FText::FromString(StatusLine));
+    }
+}
+
 void UMOBAMMOMainMenuWidget::HandleConsoleMessage(const FString& Message, const FString& Source, int32 Line)
 {
     if (Message.Contains(TEXT("UE_ACTION:")) && (Message.Contains(TEXT("\"ready\"")) || Message.Contains(TEXT("\"mainMenuReady\""))))
     {
         bPageLoaded = true;
         PushStateToWebUI();
+        UpdateNativeFallback();
     }
 
     if (!Message.StartsWith(TEXT("UE_ACTION:")))
@@ -229,7 +349,33 @@ void UMOBAMMOMainMenuWidget::HandleConsoleMessage(const FString& Message, const 
     {
         bPageLoaded = true;
         PushStateToWebUI();
+        UpdateNativeFallback();
     }
+}
+
+void UMOBAMMOMainMenuWidget::HandleNativePlayClicked()
+{
+    if (UMOBAMMOBackendSubsystem* BackendSubsystem = GetBackendSubsystem())
+    {
+        BackendSubsystem->PlayFromMainMenu();
+    }
+
+    UpdateNativeFallback();
+}
+
+void UMOBAMMOMainMenuWidget::HandleNativeCharactersClicked()
+{
+    if (UMOBAMMOBackendSubsystem* BackendSubsystem = GetBackendSubsystem())
+    {
+        BackendSubsystem->OpenMainMenuCharacters();
+    }
+
+    UpdateNativeFallback();
+}
+
+void UMOBAMMOMainMenuWidget::HandleNativeQuitClicked()
+{
+    UKismetSystemLibrary::QuitGame(this, GetOwningPlayer(), EQuitPreference::Quit, false);
 }
 
 void UMOBAMMOMainMenuWidget::HandleBackendStateChanged()

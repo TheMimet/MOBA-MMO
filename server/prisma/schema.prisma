@@ -60,6 +60,7 @@ model CharacterStats {
   maxMana     Int       @default(50)
   killCount   Int       @default(0)
   deathCount  Int       @default(0)
+  gold        Int       @default(0)
   attack      Int       @default(10)
   defense     Int       @default(5)
   createdAt   DateTime  @default(now())

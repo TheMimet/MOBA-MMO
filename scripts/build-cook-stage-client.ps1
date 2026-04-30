@@ -1,13 +1,20 @@
 $ErrorActionPreference = "Stop"
 
 $projectRoot = Split-Path -Parent $PSScriptRoot
-$engineRoot = "C:\Users\PC\OneDrive\Desktop\MOBA MMO\UE_5.7.4_Source"
+$installedEngineRoot = "C:\Program Files\Epic Games\UE_5.7"
+$sourceEngineRoot = "C:\Users\PC\OneDrive\Desktop\MOBA MMO\UE_5.7.4_Source"
+$engineRoot = if (Test-Path (Join-Path $installedEngineRoot "Engine\Build\BatchFiles\RunUAT.bat")) {
+  $installedEngineRoot
+} else {
+  $sourceEngineRoot
+}
 $uat = Join-Path $engineRoot "Engine\Build\BatchFiles\RunUAT.bat"
 $dotnet = Join-Path $engineRoot "Engine\Binaries\ThirdParty\DotNet\8.0.412\win-x64\dotnet.exe"
 $ubt = Join-Path $engineRoot "Engine\Binaries\DotNET\UnrealBuildTool\UnrealBuildTool.dll"
 $projectFile = Join-Path $projectRoot "MOBAMMO.uproject"
 $stageDir = Join-Path $projectRoot "Saved\StagedBuilds\WindowsGame"
 $cookDir = Join-Path $projectRoot "Saved\Cooked\Windows"
+$projectBin = Join-Path $projectRoot "Binaries\Win64"
 
 if (-not (Test-Path $uat)) {
   throw "RunUAT.bat not found: $uat"
@@ -47,6 +54,35 @@ if (Test-Path $cookDir) {
 
 if ($LASTEXITCODE -ne 0) {
   throw "Editor module build failed with exit code $LASTEXITCODE"
+}
+
+$runtimeCopies = @(
+  @{
+    Source = Join-Path $engineRoot "Engine\Binaries\Win64\D3D12\x64"
+    Target = Join-Path $projectBin "D3D12\x64"
+    Files = @("D3D12Core.dll", "d3d12SDKLayers.dll")
+  },
+  @{
+    Source = Join-Path $engineRoot "Engine\Binaries\Win64\DML\x64"
+    Target = Join-Path $projectBin "DML\x64"
+    Files = @("DirectML.dll")
+  },
+  @{
+    Source = Join-Path $engineRoot "Engine\Binaries\Win64"
+    Target = $projectBin
+    Files = @("tbb12.dll", "tbbmalloc.dll")
+  }
+)
+
+foreach ($copy in $runtimeCopies) {
+  New-Item -ItemType Directory -Force -Path $copy.Target | Out-Null
+
+  foreach ($file in $copy.Files) {
+    $sourceFile = Join-Path $copy.Source $file
+    if (Test-Path $sourceFile) {
+      Copy-Item -LiteralPath $sourceFile -Destination (Join-Path $copy.Target $file) -Force
+    }
+  }
 }
 
 & $uat BuildCookRun `

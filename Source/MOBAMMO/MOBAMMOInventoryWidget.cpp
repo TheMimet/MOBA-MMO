@@ -201,7 +201,7 @@ void UMOBAMMOInventoryWidget::BuildSlotGrid(UVerticalBox* Parent)
     }
 
     // Empty text overlay
-    EmptyText = MakeText(WidgetTree, TEXT("No items yet. Press 8 to grant a test item."), 13, InvColors::TextSecondary);
+    EmptyText = MakeText(WidgetTree, TEXT("No items yet. Press 8 to cycle through debug items."), 13, InvColors::TextSecondary);
     EmptyText->SetJustification(ETextJustify::Center);
     EmptyText->SetVisibility(ESlateVisibility::Collapsed);
     if (UVerticalBoxSlot* S = Parent->AddChildToVerticalBox(EmptyText))
@@ -279,7 +279,10 @@ void UMOBAMMOInventoryWidget::PopulateSlot(UBorder* SlotBorder, const FMOBAMMOIn
     UTextBlock* NameText = Cast<UTextBlock>(Content->GetChildAt(1));
     if (NameText)
     {
-        NameText->SetText(FText::FromString(GetItemDisplayName(Item.ItemId)));
+        const FString DisplayName = Item.SlotIndex >= 0
+            ? FString::Printf(TEXT("[E%d] %s"), Item.SlotIndex, *GetItemDisplayName(Item.ItemId))
+            : GetItemDisplayName(Item.ItemId);
+        NameText->SetText(FText::FromString(DisplayName));
         NameText->SetColorAndOpacity(FSlateColor(Rarity));
     }
 
@@ -325,7 +328,7 @@ void UMOBAMMOInventoryWidget::BuildFooter(UVerticalBox* Parent)
     UHorizontalBox* Row = WidgetTree->ConstructWidget<UHorizontalBox>(UHorizontalBox::StaticClass());
     FooterBg->AddChild(Row);
 
-    HintText = MakeText(WidgetTree, TEXT("[I] Close"), 10, InvColors::TextSecondary);
+    HintText = MakeText(WidgetTree, TEXT("[I] Close   [8] Grant   [9] Use Potion   [0] Equip Cycle"), 10, InvColors::TextSecondary);
     if (UHorizontalBoxSlot* S = Row->AddChildToHorizontalBox(HintText))
     {
         S->SetSize(ESlateSizeRule::Fill);
@@ -381,7 +384,7 @@ void UMOBAMMOInventoryWidget::RefreshInventory()
     int32 FilledCount = 0;
     for (const FMOBAMMOInventoryItem& Item : Items)
     {
-        int32 TargetSlot = Item.SlotIndex >= 0 && Item.SlotIndex < TotalSlots ? Item.SlotIndex : FilledCount;
+        int32 TargetSlot = FilledCount;
         if (TargetSlot < TotalSlots)
         {
             PopulateSlot(SlotBorders[TargetSlot], Item);
@@ -405,6 +408,9 @@ void UMOBAMMOInventoryWidget::RefreshInventory()
 // ─── Static helpers ──────────────────────────────────────────
 FLinearColor UMOBAMMOInventoryWidget::GetRarityColor(const FString& ItemId)
 {
+    if (ItemId == TEXT("mana_ring")) return InvColors::RarityRare;
+    if (ItemId == TEXT("crystal_staff") || ItemId == TEXT("chain_body") || ItemId == TEXT("swift_boots")) return InvColors::RarityUncommon;
+    if (ItemId == TEXT("health_potion_small") || ItemId == TEXT("mana_potion_small") || ItemId == TEXT("iron_sword") || ItemId == TEXT("leather_helm") || ItemId == TEXT("sparring_token")) return InvColors::RarityCommon;
     if (ItemId.Contains(TEXT("legend")) || ItemId.Contains(TEXT("divine"))) return InvColors::RarityLegend;
     if (ItemId.Contains(TEXT("epic")) || ItemId.Contains(TEXT("shadow")))   return InvColors::RarityEpic;
     if (ItemId.Contains(TEXT("rare")) || ItemId.Contains(TEXT("crystal"))) return InvColors::RarityRare;
@@ -414,6 +420,16 @@ FLinearColor UMOBAMMOInventoryWidget::GetRarityColor(const FString& ItemId)
 
 FString UMOBAMMOInventoryWidget::GetItemDisplayName(const FString& ItemId)
 {
+    if (ItemId == TEXT("health_potion_small")) return TEXT("Small Health Potion");
+    if (ItemId == TEXT("mana_potion_small")) return TEXT("Small Mana Potion");
+    if (ItemId == TEXT("iron_sword")) return TEXT("Iron Sword");
+    if (ItemId == TEXT("crystal_staff")) return TEXT("Crystal Staff");
+    if (ItemId == TEXT("leather_helm")) return TEXT("Leather Helm");
+    if (ItemId == TEXT("chain_body")) return TEXT("Chain Body");
+    if (ItemId == TEXT("swift_boots")) return TEXT("Swift Boots");
+    if (ItemId == TEXT("mana_ring")) return TEXT("Mana Ring");
+    if (ItemId == TEXT("sparring_token")) return TEXT("Sparring Token");
+
     // Simple prettifier: health_potion -> Health Potion
     FString Name = ItemId;
     Name.ReplaceInline(TEXT("_"), TEXT(" "));
@@ -427,6 +443,16 @@ FString UMOBAMMOInventoryWidget::GetItemDisplayName(const FString& ItemId)
 
 FString UMOBAMMOInventoryWidget::GetItemDescription(const FString& ItemId)
 {
+    if (ItemId == TEXT("health_potion_small")) return TEXT("Restores 25 HP instantly.");
+    if (ItemId == TEXT("mana_potion_small")) return TEXT("Restores 20 mana instantly.");
+    if (ItemId == TEXT("iron_sword")) return TEXT("A basic front-line weapon. Max HP +10.");
+    if (ItemId == TEXT("crystal_staff")) return TEXT("A mana-focused staff for mages. Max Mana +20.");
+    if (ItemId == TEXT("leather_helm")) return TEXT("Light head armor. Max HP +15.");
+    if (ItemId == TEXT("chain_body")) return TEXT("Medium body armor. Max HP +30.");
+    if (ItemId == TEXT("swift_boots")) return TEXT("Enchanted boots. Max Mana +10.");
+    if (ItemId == TEXT("mana_ring")) return TEXT("A rare crystal ring. Max Mana +25, Max HP +10.");
+    if (ItemId == TEXT("sparring_token")) return TEXT("A training token dropped by Sparring Minions.");
+
     if (ItemId.Contains(TEXT("potion"))) return TEXT("Restores health when consumed.");
     if (ItemId.Contains(TEXT("sword")))  return TEXT("A sharp blade for close combat.");
     if (ItemId.Contains(TEXT("shield"))) return TEXT("Provides additional defense.");
@@ -436,6 +462,9 @@ FString UMOBAMMOInventoryWidget::GetItemDescription(const FString& ItemId)
 
 FString UMOBAMMOInventoryWidget::GetRarityLabel(const FString& ItemId)
 {
+    if (ItemId == TEXT("mana_ring")) return TEXT("RARE");
+    if (ItemId == TEXT("crystal_staff") || ItemId == TEXT("chain_body") || ItemId == TEXT("swift_boots")) return TEXT("UNCOMMON");
+    if (ItemId == TEXT("health_potion_small") || ItemId == TEXT("mana_potion_small") || ItemId == TEXT("iron_sword") || ItemId == TEXT("leather_helm") || ItemId == TEXT("sparring_token")) return TEXT("COMMON");
     if (ItemId.Contains(TEXT("legend")) || ItemId.Contains(TEXT("divine"))) return TEXT("LEGENDARY");
     if (ItemId.Contains(TEXT("epic")) || ItemId.Contains(TEXT("shadow")))   return TEXT("EPIC");
     if (ItemId.Contains(TEXT("rare")) || ItemId.Contains(TEXT("crystal"))) return TEXT("RARE");

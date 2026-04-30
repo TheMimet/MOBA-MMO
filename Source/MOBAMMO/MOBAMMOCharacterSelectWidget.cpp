@@ -1,8 +1,14 @@
 #include "MOBAMMOCharacterSelectWidget.h"
 
 #include "Blueprint/WidgetTree.h"
+#include "Components/Border.h"
+#include "Components/Button.h"
 #include "Components/Overlay.h"
 #include "Components/OverlaySlot.h"
+#include "Components/SizeBox.h"
+#include "Components/TextBlock.h"
+#include "Components/VerticalBox.h"
+#include "Components/VerticalBoxSlot.h"
 #include "GameFramework/PlayerController.h"
 #include "WebBrowser.h"
 #include "Dom/JsonObject.h"
@@ -31,8 +37,14 @@ void UMOBAMMOCharacterSelectWidget::NativeConstruct()
 
 void UMOBAMMOCharacterSelectWidget::RefreshFromBackend()
 {
+	const bool bVisible = ShouldBeVisible();
+	SetVisibility(bVisible ? ESlateVisibility::Visible : ESlateVisibility::Collapsed);
+	if (bVisible)
+	{
+		LoadWebUIIfNeeded();
+	}
 	PushStateToWebUI();
-	SetVisibility(ShouldBeVisible() ? ESlateVisibility::Visible : ESlateVisibility::Collapsed);
+	UpdateNativeFallback();
 }
 
 bool UMOBAMMOCharacterSelectWidget::ShouldBeVisible() const
@@ -81,8 +93,15 @@ void UMOBAMMOCharacterSelectWidget::BuildLayout()
 	UOverlay* RootOverlay = WidgetTree->ConstructWidget<UOverlay>(UOverlay::StaticClass());
 	WidgetTree->RootWidget = RootOverlay;
 
+	UBorder* LoadingBackdrop = WidgetTree->ConstructWidget<UBorder>(UBorder::StaticClass());
+	LoadingBackdrop->SetBrushColor(FLinearColor(0.005f, 0.006f, 0.010f, 1.0f));
+	if (UOverlaySlot* BackdropSlot = RootOverlay->AddChildToOverlay(LoadingBackdrop))
+	{
+		BackdropSlot->SetHorizontalAlignment(HAlign_Fill);
+		BackdropSlot->SetVerticalAlignment(VAlign_Fill);
+	}
+
 	WebBrowserWidget = WidgetTree->ConstructWidget<UWebBrowser>(UWebBrowser::StaticClass());
-	WebBrowserWidget->LoadURL(WebUIBaseUrl + TEXT("/character-creator"));
 
 	WebBrowserWidget->OnConsoleMessage.AddDynamic(this, &UMOBAMMOCharacterSelectWidget::HandleConsoleMessage);
 
@@ -91,11 +110,92 @@ void UMOBAMMOCharacterSelectWidget::BuildLayout()
 		BrowserSlot->SetHorizontalAlignment(HAlign_Fill);
 		BrowserSlot->SetVerticalAlignment(VAlign_Fill);
 	}
+
+	NativeFallbackPanel = WidgetTree->ConstructWidget<UBorder>(UBorder::StaticClass());
+	NativeFallbackPanel->SetBrushColor(FLinearColor(0.020f, 0.022f, 0.030f, 0.96f));
+	NativeFallbackPanel->SetPadding(FMargin(30.0f, 26.0f));
+
+	UVerticalBox* PanelContent = WidgetTree->ConstructWidget<UVerticalBox>(UVerticalBox::StaticClass());
+	NativeFallbackPanel->SetContent(PanelContent);
+
+	UTextBlock* TitleText = WidgetTree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass());
+	TitleText->SetText(FText::FromString(TEXT("Characters")));
+	TitleText->SetColorAndOpacity(FSlateColor(FLinearColor(0.90f, 0.86f, 0.70f, 1.0f)));
+	TitleText->SetJustification(ETextJustify::Center);
+	FSlateFontInfo TitleFont = TitleText->GetFont();
+	TitleFont.Size = 28;
+	TitleFont.TypefaceFontName = TEXT("Bold");
+	TitleText->SetFont(TitleFont);
+	PanelContent->AddChildToVerticalBox(TitleText);
+
+	NativeFallbackStatusText = WidgetTree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass());
+	NativeFallbackStatusText->SetText(FText::FromString(TEXT("Character WebUI is loading. Native fallback is available.")));
+	NativeFallbackStatusText->SetColorAndOpacity(FSlateColor(FLinearColor(0.72f, 0.78f, 0.88f, 1.0f)));
+	NativeFallbackStatusText->SetAutoWrapText(true);
+	NativeFallbackStatusText->SetJustification(ETextJustify::Center);
+	if (UVerticalBoxSlot* StatusSlot = PanelContent->AddChildToVerticalBox(NativeFallbackStatusText))
+	{
+		StatusSlot->SetPadding(FMargin(0.0f, 10.0f, 0.0f, 18.0f));
+	}
+
+	auto MakeFallbackButton = [this, PanelContent](const FString& Label, const FLinearColor& Color) -> UButton*
+	{
+		UButton* Button = WidgetTree->ConstructWidget<UButton>(UButton::StaticClass());
+		Button->SetBackgroundColor(Color);
+		UTextBlock* ButtonText = WidgetTree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass());
+		ButtonText->SetText(FText::FromString(Label));
+		ButtonText->SetColorAndOpacity(FSlateColor(FLinearColor::White));
+		ButtonText->SetJustification(ETextJustify::Center);
+		FSlateFontInfo ButtonFont = ButtonText->GetFont();
+		ButtonFont.Size = 16;
+		ButtonFont.TypefaceFontName = TEXT("Bold");
+		ButtonText->SetFont(ButtonFont);
+		Button->AddChild(ButtonText);
+		if (UVerticalBoxSlot* ButtonSlot = PanelContent->AddChildToVerticalBox(Button))
+		{
+			ButtonSlot->SetPadding(FMargin(0.0f, 5.0f));
+			ButtonSlot->SetHorizontalAlignment(HAlign_Fill);
+		}
+		return Button;
+	};
+
+	NativeStartButton = MakeFallbackButton(TEXT("Start Selected"), FLinearColor(0.16f, 0.36f, 0.24f, 1.0f));
+	NativeCreateButton = MakeFallbackButton(TEXT("Create Test Hero"), FLinearColor(0.18f, 0.27f, 0.44f, 1.0f));
+	UButton* NativeRefreshButton = MakeFallbackButton(TEXT("Refresh"), FLinearColor(0.26f, 0.21f, 0.13f, 1.0f));
+
+	NativeStartButton->OnClicked.AddDynamic(this, &UMOBAMMOCharacterSelectWidget::HandleNativeStartClicked);
+	NativeCreateButton->OnClicked.AddDynamic(this, &UMOBAMMOCharacterSelectWidget::HandleNativeCreateClicked);
+	NativeRefreshButton->OnClicked.AddDynamic(this, &UMOBAMMOCharacterSelectWidget::HandleNativeRefreshClicked);
+
+	USizeBox* PanelSizeBox = WidgetTree->ConstructWidget<USizeBox>(USizeBox::StaticClass());
+	PanelSizeBox->SetWidthOverride(430.0f);
+	PanelSizeBox->SetContent(NativeFallbackPanel);
+	PanelSizeBox->SetVisibility(ESlateVisibility::Collapsed);
+	if (UOverlaySlot* FallbackSlot = RootOverlay->AddChildToOverlay(PanelSizeBox))
+	{
+		FallbackSlot->SetHorizontalAlignment(HAlign_Center);
+		FallbackSlot->SetVerticalAlignment(VAlign_Center);
+		FallbackSlot->SetPadding(FMargin(24.0f));
+	}
+
+	UpdateNativeFallback();
 }
 
 // ─────────────────────────────────────────────────────────────
 // Subsystem Binding
 // ─────────────────────────────────────────────────────────────
+void UMOBAMMOCharacterSelectWidget::LoadWebUIIfNeeded()
+{
+	if (!WebBrowserWidget || bWebUILoadRequested)
+	{
+		return;
+	}
+
+	bWebUILoadRequested = true;
+	bPageLoaded = false;
+	WebBrowserWidget->LoadURL(WebUIBaseUrl + TEXT("/character-creator"));
+}
+
 void UMOBAMMOCharacterSelectWidget::BindToSubsystem(UMOBAMMOBackendSubsystem* BackendSubsystem)
 {
 	if (!BackendSubsystem || bBoundToSubsystem)
@@ -168,6 +268,43 @@ void UMOBAMMOCharacterSelectWidget::PushStateToWebUI()
 	WebBrowserWidget->ExecuteJavascript(Script);
 }
 
+void UMOBAMMOCharacterSelectWidget::UpdateNativeFallback()
+{
+	if (NativeFallbackPanel)
+	{
+		NativeFallbackPanel->SetVisibility(ESlateVisibility::Collapsed);
+	}
+	if (WebBrowserWidget)
+	{
+		WebBrowserWidget->SetVisibility(ESlateVisibility::Visible);
+	}
+
+	const UMOBAMMOBackendSubsystem* BackendSubsystem = GetBackendSubsystem();
+	const int32 CharacterCount = BackendSubsystem ? BackendSubsystem->GetCachedCharacters().Num() : 0;
+	const FString CharacterStatus = BackendSubsystem ? BackendSubsystem->GetCharacterStatus() : TEXT("Idle");
+	const FString SessionStatus = BackendSubsystem ? BackendSubsystem->GetSessionStatus() : TEXT("Idle");
+	const bool bBusy = CharacterStatus == TEXT("Creating") || SessionStatus == TEXT("Starting") || SessionStatus == TEXT("Traveling")
+		|| (BackendSubsystem && BackendSubsystem->GetCharacterListStatus() == TEXT("Loading"));
+
+	if (NativeStartButton)
+	{
+		NativeStartButton->SetIsEnabled(false);
+	}
+	if (NativeCreateButton)
+	{
+		NativeCreateButton->SetIsEnabled(false);
+	}
+	if (NativeFallbackStatusText)
+	{
+		FString StatusLine = FString::Printf(TEXT("Web character UI is still loading. Characters: %d | Character: %s | Session: %s"), CharacterCount, *CharacterStatus, *SessionStatus);
+		if (BackendSubsystem && !BackendSubsystem->GetLastErrorMessage().IsEmpty())
+		{
+			StatusLine += FString::Printf(TEXT("\nLast error: %s"), *BackendSubsystem->GetLastErrorMessage());
+		}
+		NativeFallbackStatusText->SetText(FText::FromString(StatusLine));
+	}
+}
+
 // ─────────────────────────────────────────────────────────────
 // Console Message Handler (UE_ACTION bridge)
 // ─────────────────────────────────────────────────────────────
@@ -178,6 +315,7 @@ void UMOBAMMOCharacterSelectWidget::HandleConsoleMessage(const FString& Message,
 	{
 		bPageLoaded = true;
 		PushStateToWebUI();
+		UpdateNativeFallback();
 	}
 
 	// Parse UE_ACTION messages
@@ -210,6 +348,14 @@ void UMOBAMMOCharacterSelectWidget::HandleConsoleMessage(const FString& Message,
 
 	if (ActionType == TEXT("createCharacter"))
 	{
+		bool bArmed = false;
+		JsonObject->TryGetBoolField(TEXT("armed"), bArmed);
+		if (!bArmed)
+		{
+			UE_LOG(LogTemp, Warning, TEXT("[CharacterSelectWidget] Ignored unarmed createCharacter action."));
+			return;
+		}
+
 		FString Name;
 		JsonObject->TryGetStringField(TEXT("name"), Name);
 		FString ClassId;
@@ -221,6 +367,7 @@ void UMOBAMMOCharacterSelectWidget::HandleConsoleMessage(const FString& Message,
 		int32 Shade = 58;
 		int32 Transparent = 18;
 		int32 TextureDetail = 88;
+		bool bAutoEnter = false;
 
 		double TempVal;
 		if (JsonObject->TryGetNumberField(TEXT("presetId"), TempVal)) PresetId = static_cast<int32>(TempVal);
@@ -228,11 +375,21 @@ void UMOBAMMOCharacterSelectWidget::HandleConsoleMessage(const FString& Message,
 		if (JsonObject->TryGetNumberField(TEXT("shade"), TempVal)) Shade = static_cast<int32>(TempVal);
 		if (JsonObject->TryGetNumberField(TEXT("transparent"), TempVal)) Transparent = static_cast<int32>(TempVal);
 		if (JsonObject->TryGetNumberField(TEXT("textureDetail"), TempVal)) TextureDetail = static_cast<int32>(TempVal);
+		JsonObject->TryGetBoolField(TEXT("autoEnter"), bAutoEnter);
 
+		bStartSessionAfterCharacterCreate = bAutoEnter;
 		BackendSubsystem->CreateCharacterForCurrentAccount(Name, ClassId, PresetId, ColorIndex, Shade, Transparent, TextureDetail);
 	}
 	else if (ActionType == TEXT("startSession"))
 	{
+		bool bArmed = false;
+		JsonObject->TryGetBoolField(TEXT("armed"), bArmed);
+		if (!bArmed)
+		{
+			UE_LOG(LogTemp, Warning, TEXT("[CharacterSelectWidget] Ignored unarmed startSession action."));
+			return;
+		}
+
 		// Optionally accept a specific characterId
 		FString CharacterId;
 		if (JsonObject->TryGetStringField(TEXT("characterId"), CharacterId) && !CharacterId.IsEmpty())
@@ -242,6 +399,15 @@ void UMOBAMMOCharacterSelectWidget::HandleConsoleMessage(const FString& Message,
 
 		BackendSubsystem->StartSessionForSelectedCharacter();
 	}
+	else if (ActionType == TEXT("selectCharacter"))
+	{
+		FString CharacterId;
+		if (JsonObject->TryGetStringField(TEXT("characterId"), CharacterId) && !CharacterId.IsEmpty())
+		{
+			BackendSubsystem->SelectCharacter(CharacterId);
+			PushStateToWebUI();
+		}
+	}
 	else if (ActionType == TEXT("refreshCharacters"))
 	{
 		BackendSubsystem->ListCharacters(BackendSubsystem->GetLastAccountId());
@@ -250,7 +416,28 @@ void UMOBAMMOCharacterSelectWidget::HandleConsoleMessage(const FString& Message,
 	{
 		bPageLoaded = true;
 		PushStateToWebUI();
+		UpdateNativeFallback();
 	}
+}
+
+void UMOBAMMOCharacterSelectWidget::HandleNativeStartClicked()
+{
+	UE_LOG(LogTemp, Warning, TEXT("[CharacterSelectWidget] Native fallback start is disabled; use WebUI character flow."));
+}
+
+void UMOBAMMOCharacterSelectWidget::HandleNativeCreateClicked()
+{
+	UE_LOG(LogTemp, Warning, TEXT("[CharacterSelectWidget] Native fallback create is disabled; use WebUI character flow."));
+}
+
+void UMOBAMMOCharacterSelectWidget::HandleNativeRefreshClicked()
+{
+	if (UMOBAMMOBackendSubsystem* BackendSubsystem = GetBackendSubsystem())
+	{
+		BackendSubsystem->ListCharacters(BackendSubsystem->GetLastAccountId());
+	}
+
+	UpdateNativeFallback();
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -279,6 +466,11 @@ void UMOBAMMOCharacterSelectWidget::HandleCharacterCreated(const FBackendCharact
 	if (UMOBAMMOBackendSubsystem* BackendSubsystem = GetBackendSubsystem())
 	{
 		BackendSubsystem->SelectCharacter(Result.CharacterId);
+		if (bStartSessionAfterCharacterCreate)
+		{
+			bStartSessionAfterCharacterCreate = false;
+			BackendSubsystem->StartSessionForSelectedCharacter();
+		}
 	}
 
 	RefreshFromBackend();
@@ -299,5 +491,6 @@ void UMOBAMMOCharacterSelectWidget::HandleSessionStarted(const FBackendSessionRe
 
 void UMOBAMMOCharacterSelectWidget::HandleRequestFailed(const FString& ErrorMessage)
 {
+	bStartSessionAfterCharacterCreate = false;
 	RefreshFromBackend();
 }

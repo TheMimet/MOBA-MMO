@@ -2,6 +2,7 @@
 
 #include "CoreMinimal.h"
 #include "GameFramework/GameMode.h"
+#include "MOBAMMOQuestTypes.h"
 
 #include "MOBAMMOGameMode.generated.h"
 
@@ -9,6 +10,7 @@ class AMOBAMMOGameState;
 class AMOBAMMOPlayerState;
 class AMOBAMMOTrainingDummyActor;
 class AMOBAMMOTrainingMinionActor;
+class AMOBAMMOVendorActor;
 
 UCLASS()
 class MOBAMMO_API AMOBAMMOGameMode : public AGameMode
@@ -18,6 +20,7 @@ class MOBAMMO_API AMOBAMMOGameMode : public AGameMode
 public:
     AMOBAMMOGameMode();
 
+    virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
     virtual FString InitNewPlayer(APlayerController* NewPlayerController, const FUniqueNetIdRepl& UniqueId, const FString& Options, const FString& Portal) override;
     virtual void PostLogin(APlayerController* NewPlayer) override;
     virtual void Logout(AController* Exiting) override;
@@ -50,14 +53,28 @@ public:
     UFUNCTION(BlueprintCallable, Category="MOBAMMO|Debug")
     bool CastDebugGrantItem(AController* InstigatorController, const FString& ItemId, int32 Quantity);
 
+    UFUNCTION(BlueprintCallable, Category="MOBAMMO|Inventory")
+    bool UseFirstInventoryConsumable(AController* InstigatorController);
+
+    UFUNCTION(BlueprintCallable, Category="MOBAMMO|Inventory")
+    bool ToggleEquipFirstInventoryItem(AController* InstigatorController);
+
     UFUNCTION(BlueprintCallable, Category="MOBAMMO|Debug")
     bool TriggerDebugManaRestore(AController* InstigatorController);
+
+    UFUNCTION(BlueprintCallable, Category="MOBAMMO|Vendor")
+    bool HandleVendorPurchase(AController* BuyerController, const FString& ItemId);
+
+    // Skill point spending — called by server RPC in PlayerController.
+    UFUNCTION(BlueprintCallable, Category="MOBAMMO|Skills")
+    bool HandleSpendSkillPoint(AController* Controller, int32 AbilitySlotIndex);
 
 private:
     void UpdateConnectedPlayerCount();
     void ApplyPlayerSessionData(APlayerController* NewPlayerController, const FString& Options);
     void EnsureTrainingDummyActor();
     void EnsureTrainingMinionActor();
+    void EnsureVendorActor();
     void ScheduleTrainingMinionRespawn();
     void RespawnTrainingMinionActor();
     void StartTrainingMinionAutoAttackLoop();
@@ -65,6 +82,8 @@ private:
     void TickTrainingMinionAutoAttack();
     void TriggerTrainingMinionCounterAttack(AController* TargetController);
     bool ApplyTrainingMinionStrike(AController* TargetController, float DamageAmount, const FString& StrikeName);
+    void GrantMinionLootToPlayer(AController* KillerController);
+    bool HasActiveSession(AController* Controller) const;
     AMOBAMMOPlayerState* ResolveMOBAPlayerState(AController* Controller) const;
     AController* ResolveSelectedDebugTarget(const AMOBAMMOPlayerState* InstigatorState, AController* InstigatorController) const;
     bool IsTrainingDummySelected(const AMOBAMMOPlayerState* InstigatorState) const;
@@ -87,6 +106,34 @@ private:
     AController* ResolveDebugTarget(AController* InstigatorController) const;
     bool IsControllerInAbilityRange(const AController* SourceController, const AController* TargetController, float AbilityRange) const;
     void PushCombatLog(const FString& CombatLog) const;
+    void GrantKillExperience(AController* KillerController, int32 XPAmount, const FString& TargetName);
+    void GrantKillReward(AController* KillerController, int32 XPAmount, int32 GoldAmount, const FString& TargetName);
+
+    // Quest system
+    void NotifyQuestEvent(AController* Controller, EMOBAMMOQuestType Type, int32 Amount = 1);
+    void GrantQuestReward(AController* Controller, const FString& QuestId);
+
+    // Rank-scaled ability stat helpers. Rank 1 = base, each extra rank adds 20% power / -10% cooldown.
+    float RankScaledPower(float BasePower, int32 Rank) const;
+    float RankScaledCooldown(float BaseCooldown, int32 Rank) const;
+
+    UPROPERTY(EditDefaultsOnly, Category="MOBAMMO|Progression")
+    int32 KillXPTrainingDummy = 15;
+
+    UPROPERTY(EditDefaultsOnly, Category="MOBAMMO|Progression")
+    int32 KillXPTrainingMinion = 40;
+
+    UPROPERTY(EditDefaultsOnly, Category="MOBAMMO|Progression")
+    int32 KillXPPlayer = 60;
+
+    UPROPERTY(EditDefaultsOnly, Category="MOBAMMO|Currency")
+    int32 KillGoldTrainingDummy = 2;
+
+    UPROPERTY(EditDefaultsOnly, Category="MOBAMMO|Currency")
+    int32 KillGoldTrainingMinion = 8;
+
+    UPROPERTY(EditDefaultsOnly, Category="MOBAMMO|Currency")
+    int32 KillGoldPlayer = 15;
 
     UPROPERTY(EditDefaultsOnly, Category="MOBAMMO|Gameplay")
     float DefaultMaxHealth = 100.0f;
@@ -168,6 +215,15 @@ private:
     UPROPERTY(EditDefaultsOnly, Category="MOBAMMO|Training")
     FRotator TrainingDummySpawnRotation = FRotator(0.0f, 180.0f, 0.0f);
 
+    UPROPERTY(EditDefaultsOnly, Category="MOBAMMO|Vendor")
+    FVector VendorSpawnLocation = FVector(-520.0f, 360.0f, 140.0f);
+
+    UPROPERTY(EditDefaultsOnly, Category="MOBAMMO|Vendor")
+    FRotator VendorSpawnRotation = FRotator(0.0f, 0.0f, 0.0f);
+
+    UPROPERTY(EditDefaultsOnly, Category="MOBAMMO|Vendor")
+    float VendorPurchaseRange = 900.0f;
+
     UPROPERTY(EditDefaultsOnly, Category="MOBAMMO|Training")
     FVector TrainingMinionSpawnLocation = FVector(520.0f, -360.0f, 140.0f);
 
@@ -200,6 +256,9 @@ private:
 
     UPROPERTY(Transient)
     TObjectPtr<AMOBAMMOTrainingMinionActor> TrainingMinionActor;
+
+    UPROPERTY(Transient)
+    TObjectPtr<AMOBAMMOVendorActor> VendorActor;
 
     FTimerHandle TrainingMinionRespawnTimerHandle;
     FTimerHandle TrainingMinionAutoAttackTimerHandle;

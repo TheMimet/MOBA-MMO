@@ -18,3 +18,17 @@ FString UMOBAMMOBackendConfig::ResolveSessionServerSecret() const
 
     return SessionServerSecret.TrimStartAndEnd();
 }
+
+bool UMOBAMMOBackendConfig::IsAdminAccount(const FString& AccountId) const
+{
+    const FString Trimmed = AccountId.TrimStartAndEnd();
+    if (Trimmed.IsEmpty()) return false;
+    for (const FString& AdminId : AdminAccountIds)
+    {
+        if (AdminId.TrimStartAndEnd().Equals(Trimmed, ESearchCase::IgnoreCase))
+        {
+            return true;
+        }
+    }
+    return false;
+}

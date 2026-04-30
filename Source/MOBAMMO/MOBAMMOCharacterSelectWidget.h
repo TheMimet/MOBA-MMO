@@ -7,6 +7,9 @@
 #include "MOBAMMOCharacterSelectWidget.generated.h"
 
 class UMOBAMMOBackendSubsystem;
+class UBorder;
+class UButton;
+class UTextBlock;
 class UWebBrowser;
 
 UCLASS(BlueprintType, Blueprintable)
@@ -34,9 +37,21 @@ protected:
 private:
     void BuildLayout();
     void BindToSubsystem(UMOBAMMOBackendSubsystem* BackendSubsystem);
+    void LoadWebUIIfNeeded();
     void PushStateToWebUI();
+    void UpdateNativeFallback();
+
     UFUNCTION()
     void HandleConsoleMessage(const FString& Message, const FString& Source, int32 Line);
+
+    UFUNCTION()
+    void HandleNativeStartClicked();
+
+    UFUNCTION()
+    void HandleNativeCreateClicked();
+
+    UFUNCTION()
+    void HandleNativeRefreshClicked();
 
     UFUNCTION()
     void HandleBackendStateChanged();
@@ -59,6 +74,20 @@ private:
     UPROPERTY(Transient)
     UWebBrowser* WebBrowserWidget;
 
+    UPROPERTY(Transient)
+    UBorder* NativeFallbackPanel;
+
+    UPROPERTY(Transient)
+    UTextBlock* NativeFallbackStatusText;
+
+    UPROPERTY(Transient)
+    UButton* NativeStartButton;
+
+    UPROPERTY(Transient)
+    UButton* NativeCreateButton;
+
     bool bBoundToSubsystem = false;
     bool bPageLoaded = false;
+    bool bWebUILoadRequested = false;
+    bool bStartSessionAfterCharacterCreate = false;
 };

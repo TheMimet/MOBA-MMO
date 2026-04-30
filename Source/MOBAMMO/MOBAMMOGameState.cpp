@@ -5,6 +5,10 @@
 AMOBAMMOGameState::AMOBAMMOGameState()
 {
     bReplicates = true;
+
+    // GameState carries shared world data (scoreboard, chat, training dummy).
+    // 4 Hz is plenty — it only changes on combat events, not per-frame.
+    SetNetUpdateFrequency(4.0f);
 }
 
 void AMOBAMMOGameState::SetConnectedPlayers(int32 NewConnectedPlayers)
@@ -123,6 +127,7 @@ void AMOBAMMOGameState::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& Ou
     DOREPLIFETIME(AMOBAMMOGameState, ConnectedPlayers);
     DOREPLIFETIME(AMOBAMMOGameState, LastCombatLog);
     DOREPLIFETIME(AMOBAMMOGameState, CombatFeed);
+    DOREPLIFETIME(AMOBAMMOGameState, ChatMessages);
     DOREPLIFETIME(AMOBAMMOGameState, TrainingDummyCharacterId);
     DOREPLIFETIME(AMOBAMMOGameState, TrainingDummyName);
     DOREPLIFETIME(AMOBAMMOGameState, TrainingDummyHealth);
@@ -146,6 +151,28 @@ void AMOBAMMOGameState::OnRep_LastCombatLog()
 }
 
 void AMOBAMMOGameState::OnRep_CombatFeed()
+{
+    OnReplicatedStateUpdated.Broadcast();
+}
+
+void AMOBAMMOGameState::PushChatMessage(const FString& SenderName, const FString& Message)
+{
+    if (!HasAuthority() || Message.IsEmpty())
+    {
+        return;
+    }
+
+    ChatMessages.Insert(FString::Printf(TEXT("[%s] %s"), *SenderName, *Message), 0);
+    while (ChatMessages.Num() > 8)
+    {
+        ChatMessages.Pop();
+    }
+
+    ForceNetUpdate();
+    OnReplicatedStateUpdated.Broadcast();
+}
+
+void AMOBAMMOGameState::OnRep_ChatMessages()
 {
     OnReplicatedStateUpdated.Broadcast();
 }

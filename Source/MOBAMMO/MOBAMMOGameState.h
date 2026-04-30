@@ -36,6 +36,12 @@ public:
     UFUNCTION(BlueprintCallable, Category="MOBAMMO|Replication")
     void PushCombatFeedEntry(const FString& NewCombatLog);
 
+    UFUNCTION(BlueprintCallable, Category="MOBAMMO|Chat")
+    void PushChatMessage(const FString& SenderName, const FString& Message);
+
+    UFUNCTION(BlueprintPure, Category="MOBAMMO|Chat")
+    const TArray<FString>& GetChatMessages() const { return ChatMessages; }
+
     UFUNCTION(BlueprintPure, Category="MOBAMMO|Training")
     FString GetTrainingDummyCharacterId() const { return TrainingDummyCharacterId; }
 
@@ -93,6 +99,9 @@ protected:
     UPROPERTY(ReplicatedUsing=OnRep_CombatFeed, BlueprintReadOnly, Category="MOBAMMO|Replication")
     TArray<FString> CombatFeed;
 
+    UPROPERTY(ReplicatedUsing=OnRep_ChatMessages, BlueprintReadOnly, Category="MOBAMMO|Chat")
+    TArray<FString> ChatMessages;
+
     UPROPERTY(ReplicatedUsing=OnRep_TrainingDummy, BlueprintReadOnly, Category="MOBAMMO|Training")
     FString TrainingDummyCharacterId = TEXT("training-dummy");
 
@@ -132,6 +141,9 @@ private:
 
     UFUNCTION()
     void OnRep_CombatFeed();
+
+    UFUNCTION()
+    void OnRep_ChatMessages();
 
     UFUNCTION()
     void OnRep_TrainingDummy();

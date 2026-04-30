@@ -10,9 +10,11 @@
 #include "MOBAMMOBackendSubsystem.h"
 #include "MOBAMMOGameHUDWidget.h"
 #include "MOBAMMOLoginScreenWidget.h"
+#include "MOBAMMOPauseMenuWidget.h"
 #include "MOBAMMOLoadingScreenWidget.h"
 #include "MOBAMMOMainMenuWidget.h"
 #include "MOBAMMOCharacterSelectWidget.h"
+#include "MOBAMMOVendorWidget.h"
 #include "UObject/SoftObjectPath.h"
 
 void UMOBAMMOGameUISubsystem::Initialize(FSubsystemCollectionBase& Collection)
@@ -67,6 +69,18 @@ void UMOBAMMOGameUISubsystem::Deinitialize()
         HUDWidget = nullptr;
     }
 
+    if (PauseMenuWidget)
+    {
+        PauseMenuWidget->RemoveFromParent();
+        PauseMenuWidget = nullptr;
+    }
+
+    if (VendorWidget)
+    {
+        VendorWidget->RemoveFromParent();
+        VendorWidget = nullptr;
+    }
+
     Super::Deinitialize();
 }
 
@@ -76,6 +90,111 @@ void UMOBAMMOGameUISubsystem::ToggleInventory()
     {
         HUDWidget->ToggleInventory();
     }
+}
+
+void UMOBAMMOGameUISubsystem::OpenChat()
+{
+    if (HUDWidget)
+    {
+        HUDWidget->OpenChat();
+    }
+}
+
+void UMOBAMMOGameUISubsystem::CloseChat()
+{
+    if (HUDWidget)
+    {
+        HUDWidget->CloseChat();
+    }
+}
+
+bool UMOBAMMOGameUISubsystem::IsChatOpen() const
+{
+    return HUDWidget && HUDWidget->IsChatOpen();
+}
+
+void UMOBAMMOGameUISubsystem::TogglePauseMenu()
+{
+    if (!PauseMenuWidget)
+    {
+        APlayerController* PC = nullptr;
+        if (const UGameInstance* GI = GetGameInstance())
+        {
+            if (const UWorld* World = GI->GetWorld())
+            {
+                PC = World->GetFirstPlayerController();
+            }
+        }
+        if (!PC) return;
+
+        PauseMenuWidget = CreateWidget<UMOBAMMOPauseMenuWidget>(PC, UMOBAMMOPauseMenuWidget::StaticClass());
+        if (PauseMenuWidget)
+        {
+            PauseMenuWidget->AddToViewport(3000);
+        }
+    }
+
+    if (PauseMenuWidget)
+    {
+        PauseMenuWidget->ToggleVisibility();
+    }
+}
+
+bool UMOBAMMOGameUISubsystem::IsPauseMenuVisible() const
+{
+    return PauseMenuWidget && PauseMenuWidget->IsMenuVisible();
+}
+
+void UMOBAMMOGameUISubsystem::ToggleVendor()
+{
+    if (IsVendorOpen())
+    {
+        CloseVendor();
+    }
+    else
+    {
+        OpenVendor();
+    }
+}
+
+void UMOBAMMOGameUISubsystem::OpenVendor()
+{
+    if (!VendorWidget)
+    {
+        APlayerController* PC = nullptr;
+        if (const UGameInstance* GI = GetGameInstance())
+        {
+            if (const UWorld* World = GI->GetWorld())
+            {
+                PC = World->GetFirstPlayerController();
+            }
+        }
+        if (!PC) { return; }
+
+        VendorWidget = CreateWidget<UMOBAMMOVendorWidget>(PC, UMOBAMMOVendorWidget::StaticClass());
+        if (VendorWidget)
+        {
+            VendorWidget->AddToViewport(2500);
+        }
+    }
+
+    if (VendorWidget)
+    {
+        VendorWidget->SetVendorVisible(true);
+    }
+}
+
+void UMOBAMMOGameUISubsystem::CloseVendor()
+{
+    if (VendorWidget)
+    {
+        VendorWidget->SetVendorVisible(false);
+    }
+}
+
+bool UMOBAMMOGameUISubsystem::IsVendorOpen() const
+{
+    return VendorWidget && VendorWidget->IsVendorVisible();
 }
 
 bool UMOBAMMOGameUISubsystem::Tick(float DeltaTime)
@@ -180,7 +299,7 @@ void UMOBAMMOGameUISubsystem::EnsureWidgets(APlayerController* PlayerController)
         MainMenuWidget = CreateWidget<UMOBAMMOMainMenuWidget>(PlayerController, ResolveMainMenuWidgetClass());
         if (MainMenuWidget)
         {
-            MainMenuWidget->AddToViewport(7300);
+            MainMenuWidget->AddToViewport(7600);
         }
     }
 
@@ -218,7 +337,7 @@ void UMOBAMMOGameUISubsystem::ReconcileSessionState(APlayerController* PlayerCon
     }
 
     UWorld* World = PlayerController->GetWorld();
-    if (!World || World->GetNetMode() != NM_Client)
+    if (!World || (World->GetNetMode() != NM_Client && World->GetNetMode() != NM_Standalone))
     {
         return;
     }
@@ -292,11 +411,11 @@ void UMOBAMMOGameUISubsystem::ReconcileCommandLineAutoSession()
 
 void UMOBAMMOGameUISubsystem::UpdateWidgetVisibility(APlayerController* PlayerController)
 {
-    const bool bLoadingVisible = LoadingWidget && LoadingWidget->ShouldBeVisible();
-    const bool bLoginVisible = LoginWidget && LoginWidget->ShouldBeVisible();
-    const bool bMainMenuVisible = MainMenuWidget && MainMenuWidget->ShouldBeVisible();
-    const bool bCharacterSelectVisible = CharacterSelectWidget && CharacterSelectWidget->ShouldBeVisible();
-    const bool bHUDVisible = HUDWidget && HUDWidget->ShouldBeVisible();
+    const UWorld* World = PlayerController ? PlayerController->GetWorld() : nullptr;
+    const bool bPlayableClientPawnReady = World
+        && (World->GetNetMode() == NM_Client || World->GetNetMode() == NM_Standalone)
+        && PlayerController
+        && PlayerController->GetPawn();
 
     if (LoginWidget)
     {
@@ -323,10 +442,39 @@ void UMOBAMMOGameUISubsystem::UpdateWidgetVisibility(APlayerController* PlayerCo
         HUDWidget->RefreshFromBackend();
     }
 
-    const bool bNeedsCursor = bLoginVisible || bLoadingVisible || bMainMenuVisible || bCharacterSelectVisible;
-    PlayerController->SetShowMouseCursor(bNeedsCursor);
+    auto IsWidgetActuallyVisible = [](const UUserWidget* Widget)
+    {
+        return Widget
+            && Widget->GetVisibility() != ESlateVisibility::Collapsed
+            && Widget->GetVisibility() != ESlateVisibility::Hidden;
+    };
 
-    if (bNeedsCursor)
+    const bool bLoadingVisible = IsWidgetActuallyVisible(LoadingWidget);
+    const bool bLoginVisible = IsWidgetActuallyVisible(LoginWidget);
+    const bool bMainMenuVisible = IsWidgetActuallyVisible(MainMenuWidget);
+    const bool bCharacterSelectVisible = IsWidgetActuallyVisible(CharacterSelectWidget);
+    const bool bHUDVisible = IsWidgetActuallyVisible(HUDWidget);
+    const bool bChatOpen = HUDWidget && HUDWidget->IsChatOpen();
+    const bool bInventoryOpen = HUDWidget && HUDWidget->IsInventoryOpen();
+    const bool bPauseMenuVisible = PauseMenuWidget && PauseMenuWidget->IsMenuVisible();
+    const bool bVendorOpen = IsVendorOpen();
+
+    const bool bNeedsMenuCursor = bLoginVisible || bLoadingVisible || bMainMenuVisible || bCharacterSelectVisible;
+    const bool bNeedsGameplayCursor = bPlayableClientPawnReady && bHUDVisible;
+    const bool bMenuOwnsInput = bLoginVisible || bLoadingVisible || bMainMenuVisible || bCharacterSelectVisible;
+    const bool bBlockingUIOwnsInput = bMenuOwnsInput || bChatOpen || bInventoryOpen || bPauseMenuVisible || bVendorOpen;
+    const bool bShouldShowCursor = bNeedsMenuCursor || bNeedsGameplayCursor || bChatOpen || bInventoryOpen || bPauseMenuVisible || bVendorOpen;
+    PlayerController->SetShowMouseCursor(bShouldShowCursor);
+    PlayerController->SetIgnoreMoveInput(bBlockingUIOwnsInput);
+    PlayerController->SetIgnoreLookInput(bBlockingUIOwnsInput);
+
+    if (bChatOpen)
+    {
+        // Chat owns keyboard focus while typing; do not stomp its focused input mode every tick.
+        return;
+    }
+
+    if (bBlockingUIOwnsInput)
     {
         FInputModeGameAndUI InputMode;
         InputMode.SetHideCursorDuringCapture(false);

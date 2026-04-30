@@ -3,6 +3,7 @@
 #include "CoreMinimal.h"
 #include "GameFramework/PlayerState.h"
 #include "MOBAMMOInventoryTypes.h"
+#include "MOBAMMOQuestTypes.h"
 
 #include "MOBAMMOPlayerState.generated.h"
 
@@ -23,7 +24,7 @@ public:
     void ApplySessionIdentity(const FString& InAccountId, const FString& InCharacterId, const FString& InSessionId, const FString& InCharacterName, const FString& InClassId, int32 InLevel);
 
     UFUNCTION(BlueprintCallable, Category="MOBAMMO|Replication")
-    void ApplyPersistentCharacterState(int32 InExperience, const FVector& InSavedWorldPosition, float InCurrentHealth, float InMaxHealth, float InCurrentMana, float InMaxMana, int32 InKillCount, int32 InDeathCount);
+    void ApplyPersistentCharacterState(int32 InExperience, const FVector& InSavedWorldPosition, float InCurrentHealth, float InMaxHealth, float InCurrentMana, float InMaxMana, int32 InKillCount, int32 InDeathCount, int32 InGold = 0);
 
     UFUNCTION(BlueprintCallable, Category="MOBAMMO|Replication")
     void ApplyPersistentInventory(const TArray<FMOBAMMOInventoryItem>& InInventoryItems);
@@ -85,6 +86,45 @@ public:
     UFUNCTION(BlueprintPure, Category="MOBAMMO|Replication")
     int32 GetCharacterExperience() const { return CharacterExperience; }
 
+    // ── Progression / Level-Up ────────────────────────────────────
+    static constexpr int32 MaxCharacterLevel = 20;
+
+    // Adds Amount XP. Returns the number of levels gained (0 if no level-up).
+    // Authority-only; recalculates MaxHealth/MaxMana on level-up.
+    UFUNCTION(BlueprintCallable, Category="MOBAMMO|Progression")
+    int32 GrantExperience(int32 Amount);
+
+    // XP needed to advance from Level → Level+1 (e.g. Level 1 → 100 XP, Level 5 → 500 XP).
+    UFUNCTION(BlueprintPure, Category="MOBAMMO|Progression")
+    int32 GetXPRequiredForLevel(int32 Level) const;
+
+    // Cumulative total XP required to *reach* Level (e.g. Level 1 → 0, Level 2 → 100, Level 3 → 300).
+    UFUNCTION(BlueprintPure, Category="MOBAMMO|Progression")
+    int32 GetTotalXPForLevel(int32 Level) const;
+
+    // XP remaining until next level-up; 0 if at max level.
+    UFUNCTION(BlueprintPure, Category="MOBAMMO|Progression")
+    int32 GetExperienceToNextLevel() const;
+
+    // 0..1 fill fraction for the XP bar within the current level band.
+    UFUNCTION(BlueprintPure, Category="MOBAMMO|Progression")
+    float GetExperienceProgressFraction() const;
+
+    UFUNCTION(BlueprintPure, Category="MOBAMMO|Progression")
+    bool IsMaxLevel() const { return CharacterLevel >= MaxCharacterLevel; }
+
+    // ── Currency / Gold ──────────────────────────────────────────
+    UFUNCTION(BlueprintPure, Category="MOBAMMO|Currency")
+    int32 GetGold() const { return Gold; }
+
+    // Server-only. Returns the actual amount granted (clamped to >=0).
+    UFUNCTION(BlueprintCallable, Category="MOBAMMO|Currency")
+    int32 GrantGold(int32 Amount);
+
+    // Server-only. Returns true if the full Amount was deducted; false (no change) if insufficient.
+    UFUNCTION(BlueprintCallable, Category="MOBAMMO|Currency")
+    bool SpendGold(int32 Amount);
+
     UFUNCTION(BlueprintPure, Category="MOBAMMO|Replication")
     FVector GetSavedWorldPosition() const { return SavedWorldPosition; }
 
@@ -98,13 +138,28 @@ public:
     float GetCurrentHealth() const { return CurrentHealth; }
 
     UFUNCTION(BlueprintPure, Category="MOBAMMO|Replication")
-    float GetMaxHealth() const { return MaxHealth; }
+    float GetMaxHealth() const { return MaxHealth + EquipmentMaxHealthBonus; }
+
+    UFUNCTION(BlueprintPure, Category="MOBAMMO|Replication")
+    float GetBaseMaxHealth() const { return MaxHealth; }
 
     UFUNCTION(BlueprintPure, Category="MOBAMMO|Replication")
     float GetCurrentMana() const { return CurrentMana; }
 
     UFUNCTION(BlueprintPure, Category="MOBAMMO|Replication")
-    float GetMaxMana() const { return MaxMana; }
+    float GetMaxMana() const { return MaxMana + EquipmentMaxManaBonus; }
+
+    UFUNCTION(BlueprintPure, Category="MOBAMMO|Replication")
+    float GetBaseMaxMana() const { return MaxMana; }
+
+    UFUNCTION(BlueprintCallable, Category="MOBAMMO|Replication")
+    void SetEquipmentBonuses(float MaxHealthBonus, float MaxManaBonus);
+
+    UFUNCTION(BlueprintPure, Category="MOBAMMO|Replication")
+    float GetEquipmentMaxHealthBonus() const { return EquipmentMaxHealthBonus; }
+
+    UFUNCTION(BlueprintPure, Category="MOBAMMO|Replication")
+    float GetEquipmentMaxManaBonus() const { return EquipmentMaxManaBonus; }
 
     UFUNCTION(BlueprintCallable, Category="MOBAMMO|Replication")
     void RecordKill();
@@ -223,6 +278,44 @@ public:
     UFUNCTION(BlueprintCallable, Category="MOBAMMO|Replication")
     void RemoveItem(const FString& ItemId, int32 Quantity);
 
+    UFUNCTION(BlueprintCallable, Category="MOBAMMO|Replication")
+    bool ConsumeInventoryItem(const FString& ItemId, int32 Quantity = 1);
+
+    UFUNCTION(BlueprintCallable, Category="MOBAMMO|Replication")
+    bool EquipInventoryItem(const FString& ItemId, int32 EquipSlot);
+
+    UFUNCTION(BlueprintCallable, Category="MOBAMMO|Replication")
+    bool UnequipInventoryItem(const FString& ItemId);
+
+    // ── Skill Points / Ability Ranks ─────────────────────────────
+    static constexpr int32 MaxAbilityRank = 5;
+
+    // Server-only: tries to spend 1 skill point on the given ability slot (0-indexed).
+    // Returns true if the spend succeeded.
+    UFUNCTION(BlueprintCallable, Category="MOBAMMO|Skills")
+    bool SpendSkillPoint(int32 AbilitySlotIndex);
+
+    UFUNCTION(BlueprintPure, Category="MOBAMMO|Skills")
+    int32 GetSkillPoints() const { return SkillPoints; }
+
+    UFUNCTION(BlueprintPure, Category="MOBAMMO|Skills")
+    int32 GetAbilityRank(int32 SlotIndex) const;
+
+    UFUNCTION(BlueprintPure, Category="MOBAMMO|Skills")
+    bool CanUpgradeAbility(int32 SlotIndex) const;
+
+    // ── Quest / Objective System ──────────────────────────────────
+    // Server-only: assigns default session quests to this player.
+    UFUNCTION(BlueprintCallable, Category="MOBAMMO|Quest")
+    void AssignStartingQuests();
+
+    // Server-only: advances all active quests matching Type by Amount.
+    // Returns QuestIds that were just newly completed (for reward dispatch).
+    TArray<FString> AdvanceQuestProgress(EMOBAMMOQuestType Type, int32 Amount = 1);
+
+    UFUNCTION(BlueprintPure, Category="MOBAMMO|Quest")
+    const TArray<FMOBAMMOQuestProgress>& GetQuestProgress() const { return QuestProgress; }
+
     virtual void GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const override;
 
 protected:
@@ -292,6 +385,12 @@ protected:
     float MaxMana = 50.0f;
 
     UPROPERTY(ReplicatedUsing=OnRep_Attributes, BlueprintReadOnly, Category="MOBAMMO|Replication")
+    float EquipmentMaxHealthBonus = 0.0f;
+
+    UPROPERTY(ReplicatedUsing=OnRep_Attributes, BlueprintReadOnly, Category="MOBAMMO|Replication")
+    float EquipmentMaxManaBonus = 0.0f;
+
+    UPROPERTY(ReplicatedUsing=OnRep_Attributes, BlueprintReadOnly, Category="MOBAMMO|Replication")
     float DamageCooldownEndServerTime = 0.0f;
 
     UPROPERTY(ReplicatedUsing=OnRep_Attributes, BlueprintReadOnly, Category="MOBAMMO|Replication")
@@ -312,6 +411,9 @@ protected:
     UPROPERTY(ReplicatedUsing=OnRep_Attributes, BlueprintReadOnly, Category="MOBAMMO|Replication")
     int32 DeathCount = 0;
 
+    UPROPERTY(ReplicatedUsing=OnRep_Attributes, BlueprintReadOnly, Category="MOBAMMO|Currency")
+    int32 Gold = 0;
+
     UPROPERTY(ReplicatedUsing=OnRep_Attributes, BlueprintReadOnly, Category="MOBAMMO|Replication")
     float RespawnAvailableServerTime = 0.0f;
 
@@ -329,6 +431,18 @@ protected:
 
     UPROPERTY(ReplicatedUsing=OnRep_CombatFeedback, BlueprintReadOnly, Category="MOBAMMO|Replication")
     bool bIncomingCombatFeedbackHealing = false;
+
+    // Quest progress — replicated to the owning client only.
+    UPROPERTY(ReplicatedUsing=OnRep_QuestProgress, BlueprintReadOnly, Category="MOBAMMO|Quest")
+    TArray<FMOBAMMOQuestProgress> QuestProgress;
+
+    // Skill points available to spend (earned on each level-up).
+    UPROPERTY(ReplicatedUsing=OnRep_SkillProgress, BlueprintReadOnly, Category="MOBAMMO|Skills")
+    int32 SkillPoints = 0;
+
+    // Per-ability rank (index 0-3 → abilities 1-4). Starts at 1, max 5.
+    UPROPERTY(ReplicatedUsing=OnRep_SkillProgress, BlueprintReadOnly, Category="MOBAMMO|Skills")
+    TArray<int32> AbilityRanks;
 
 private:
     UFUNCTION()
@@ -349,5 +463,12 @@ private:
     UFUNCTION()
     void OnRep_InventoryArray();
 
+    UFUNCTION()
+    void OnRep_QuestProgress();
+
+    UFUNCTION()
+    void OnRep_SkillProgress();
+
     void BroadcastStateUpdated();
+    void RecalculateEquipmentBonusesFromInventory();
 };

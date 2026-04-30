@@ -114,6 +114,9 @@ struct FBackendSessionResult
     int32 DeathCount = 0;
 
     UPROPERTY(BlueprintReadOnly)
+    int32 Gold = 0;
+
+    UPROPERTY(BlueprintReadOnly)
     TArray<FMOBAMMOInventoryItem> InventoryItems;
 
     UPROPERTY(BlueprintReadOnly)
@@ -177,6 +180,8 @@ public:
     UFUNCTION(BlueprintCallable, Category="Backend")
     void MockLogin(const FString& Username);
 
+    void LoginFromWebUI(const FString& Username);
+
     UFUNCTION(BlueprintCallable, Category="Backend")
     void ListCharacters(const FString& AccountId);
 
@@ -207,6 +212,7 @@ public:
     void SaveCurrentCharacterProgress(APlayerController* PlayerController);
     void HeartbeatCurrentCharacterSession(APlayerController* PlayerController);
     void EndCurrentCharacterSession(APlayerController* PlayerController);
+    void ReturnToCharacterSelectAfterDisconnect(APlayerController* PlayerController);
 
     UFUNCTION(BlueprintCallable, Category="Backend")
     bool TravelToSession(APlayerController* PlayerController, const FString& ConnectString);
@@ -293,6 +299,7 @@ private:
     TWeakObjectPtr<APlayerController> PendingReconnectPlayerController;
 
     FString BuildUrl(const FString& Path) const;
+    FString BuildLocalSessionTravelUrl() const;
     void ApplyAuthHeader(const TSharedRef<IHttpRequest, ESPMode::ThreadSafe>& Request, const FString& TokenFallback = FString()) const;
     bool TryReadJsonResponse(FHttpResponseHandle Response, TSharedPtr<FJsonObject>& OutObject, FString& OutError) const;
     FString BuildErrorMessage(FHttpResponseHandle Response, const FString& FallbackMessage) const;
@@ -303,4 +310,5 @@ private:
     void NotifyDebugStateChanged();
     bool ShouldUseManualCharacterFlow() const;
     bool CanRunCharacterFlowAction(const FString& FailureMessage, FBackendRequestFailedSignature& FailureDelegate, FString& InOutStatus);
+    void RunLoginRequest(const FString& Username);
 };

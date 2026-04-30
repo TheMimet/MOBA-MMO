@@ -9,6 +9,7 @@
 #include "Components/TextBlock.h"
 #include "Components/VerticalBox.h"
 #include "Components/VerticalBoxSlot.h"
+#include "GameFramework/PlayerController.h"
 #include "MOBAMMOBackendSubsystem.h"
 
 namespace
@@ -65,6 +66,17 @@ bool UMOBAMMOLoadingScreenWidget::ShouldBeVisible() const
     }
 
     const FString SessionStatus = BackendSubsystem->GetSessionStatus();
+    const UWorld* World = GetWorld();
+    const ENetMode NetMode = World ? World->GetNetMode() : NM_Standalone;
+    if (NetMode == NM_Client)
+    {
+        const APlayerController* PlayerController = GetOwningPlayer();
+        if (PlayerController && PlayerController->GetPawn())
+        {
+            return false;
+        }
+    }
+
     return SessionStatus == TEXT("Starting") || SessionStatus == TEXT("Traveling");
 }
 

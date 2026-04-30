@@ -17,5 +17,10 @@ public:
     UPROPERTY(Config, EditAnywhere, BlueprintReadOnly, Category="Backend")
     FString SessionServerSecret;
 
+    // Account IDs with GM/admin privileges (server-side only, never replicated)
+    UPROPERTY(Config, EditAnywhere, BlueprintReadOnly, Category="Admin")
+    TArray<FString> AdminAccountIds;
+
     FString ResolveSessionServerSecret() const;
+    bool IsAdminAccount(const FString& AccountId) const;
 };

@@ -12,6 +12,9 @@
 #include "MOBAMMOPlayerState.h"
 #include "MOBAMMOTrainingDummyActor.h"
 #include "MOBAMMOTrainingMinionActor.h"
+#include "MOBAMMOVendorActor.h"
+#include "MOBAMMOVendorCatalog.h"
+#include "MOBAMMOQuestCatalog.h"
 #include "TimerManager.h"
 #include "UObject/ConstructorHelpers.h"
 #include "GameFramework/Character.h"
@@ -47,6 +50,85 @@ namespace
         OutValue = FCString::Atof(*Value);
         return true;
     }
+
+    FString GetInventoryItemDisplayName(const FString& ItemId)
+    {
+        if (ItemId == TEXT("health_potion_small")) return TEXT("Small Health Potion");
+        if (ItemId == TEXT("mana_potion_small")) return TEXT("Small Mana Potion");
+        if (ItemId == TEXT("iron_sword")) return TEXT("Iron Sword");
+        if (ItemId == TEXT("crystal_staff")) return TEXT("Crystal Staff");
+        if (ItemId == TEXT("leather_helm")) return TEXT("Leather Helm");
+        if (ItemId == TEXT("chain_body")) return TEXT("Chain Body");
+        if (ItemId == TEXT("swift_boots")) return TEXT("Swift Boots");
+        if (ItemId == TEXT("mana_ring")) return TEXT("Mana Ring");
+        if (ItemId == TEXT("sparring_token")) return TEXT("Sparring Token");
+
+        FString Name = ItemId;
+        Name.ReplaceInline(TEXT("_"), TEXT(" "));
+        return Name;
+    }
+
+    bool TryGetConsumableUseForItem(const FString& ItemId, float& OutHealthRestore, float& OutManaRestore)
+    {
+        OutHealthRestore = 0.0f;
+        OutManaRestore = 0.0f;
+
+        if (ItemId == TEXT("health_potion_small"))
+        {
+            OutHealthRestore = 25.0f;
+            return true;
+        }
+
+        if (ItemId == TEXT("mana_potion_small"))
+        {
+            OutManaRestore = 20.0f;
+            return true;
+        }
+
+        return false;
+    }
+
+    bool TryGetEquipSlotForItem(const FString& ItemId, int32& OutEquipSlot)
+    {
+        if (ItemId == TEXT("iron_sword") || ItemId == TEXT("crystal_staff"))
+        {
+            OutEquipSlot = 0;
+            return true;
+        }
+        if (ItemId == TEXT("leather_helm"))
+        {
+            OutEquipSlot = 2;
+            return true;
+        }
+        if (ItemId == TEXT("chain_body"))
+        {
+            OutEquipSlot = 3;
+            return true;
+        }
+        if (ItemId == TEXT("swift_boots"))
+        {
+            OutEquipSlot = 4;
+            return true;
+        }
+        if (ItemId == TEXT("mana_ring"))
+        {
+            OutEquipSlot = 5;
+            return true;
+        }
+
+        return false;
+    }
+
+    TArray<FMOBAMMOAbilityDefinition> GetAbilityDefinitionsForState(const AMOBAMMOPlayerState* PlayerState)
+    {
+        return MOBAMMOAbilitySet::ForClass(PlayerState ? PlayerState->GetClassId() : FString());
+    }
+
+    FMOBAMMOAbilityDefinition GetAbilityDefinitionForState(const AMOBAMMOPlayerState* PlayerState, int32 AbilityIndex, const FMOBAMMOAbilityDefinition& Fallback)
+    {
+        const TArray<FMOBAMMOAbilityDefinition> Definitions = GetAbilityDefinitionsForState(PlayerState);
+        return Definitions.IsValidIndex(AbilityIndex) ? Definitions[AbilityIndex] : Fallback;
+    }
 }
 
 AMOBAMMOGameMode::AMOBAMMOGameMode()
@@ -81,6 +163,11 @@ void AMOBAMMOGameMode::PostLogin(APlayerController* NewPlayer)
 
     UpdateConnectedPlayerCount();
 
+    if (!HasActiveSession(NewPlayer))
+    {
+        return;
+    }
+
     if (AMOBAMMOGameState* MOBAGameState = GetGameState<AMOBAMMOGameState>())
     {
         MOBAGameState->InitializeTrainingDummy();
@@ -88,6 +175,7 @@ void AMOBAMMOGameMode::PostLogin(APlayerController* NewPlayer)
 
     EnsureTrainingDummyActor();
     EnsureTrainingMinionActor();
+    EnsureVendorActor();
 
     if (AMOBAMMOPlayerState* PlayerState = NewPlayer ? NewPlayer->GetPlayerState<AMOBAMMOPlayerState>() : nullptr)
     {
@@ -95,12 +183,43 @@ void AMOBAMMOGameMode::PostLogin(APlayerController* NewPlayer)
         {
             InitializeDefaultAttributes(PlayerState);
         }
+
+        // Assign fresh session quests every time a player joins.
+        PlayerState->AssignStartingQuests();
     }
 
     RestorePlayerPawnToSavedLocation(NewPlayer);
     StartArenaSafetyLoop();
     StartPlayerAutoSaveLoop();
     StartPlayerSessionHeartbeatLoop();
+}
+
+void AMOBAMMOGameMode::EndPlay(const EEndPlayReason::Type EndPlayReason)
+{
+    // Fire final-save for any players still connected when the server world ends.
+    // In normal operation Logout() already handles per-player disconnect; this
+    // catches graceful server shutdown where Logout may not be called first.
+    if (HasAuthority())
+    {
+        if (UWorld* World = GetWorld())
+        {
+            if (UGameInstance* GameInstance = GetGameInstance())
+            {
+                if (UMOBAMMOBackendSubsystem* BackendSubsystem = GameInstance->GetSubsystem<UMOBAMMOBackendSubsystem>())
+                {
+                    for (FConstPlayerControllerIterator It = World->GetPlayerControllerIterator(); It; ++It)
+                    {
+                        if (APlayerController* PC = Cast<APlayerController>(It->Get()))
+                        {
+                            BackendSubsystem->EndCurrentCharacterSession(PC);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    Super::EndPlay(EndPlayReason);
 }
 
 void AMOBAMMOGameMode::Logout(AController* Exiting)
@@ -125,6 +244,11 @@ void AMOBAMMOGameMode::Logout(AController* Exiting)
 void AMOBAMMOGameMode::RestartPlayer(AController* NewPlayer)
 {
     Super::RestartPlayer(NewPlayer);
+    if (!HasActiveSession(NewPlayer))
+    {
+        return;
+    }
+
     RestorePlayerPawnToSavedLocation(NewPlayer);
 
     if (UWorld* World = GetWorld())
@@ -215,6 +339,119 @@ void AMOBAMMOGameMode::EnsureTrainingMinionActor()
     }
 }
 
+void AMOBAMMOGameMode::EnsureVendorActor()
+{
+    if (!HasAuthority())
+    {
+        return;
+    }
+
+    if (IsValid(VendorActor))
+    {
+        return;
+    }
+
+    UWorld* World = GetWorld();
+    if (!World)
+    {
+        return;
+    }
+
+    FActorSpawnParameters SpawnParams;
+    SpawnParams.Owner = this;
+    SpawnParams.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AdjustIfPossibleButAlwaysSpawn;
+
+    VendorActor = World->SpawnActor<AMOBAMMOVendorActor>(
+        AMOBAMMOVendorActor::StaticClass(),
+        VendorSpawnLocation,
+        VendorSpawnRotation,
+        SpawnParams
+    );
+
+    if (VendorActor)
+    {
+        PushCombatLog(TEXT("The Vendor has set up shop. Press V to browse wares."));
+    }
+}
+
+bool AMOBAMMOGameMode::HandleVendorPurchase(AController* BuyerController, const FString& ItemId)
+{
+    if (!BuyerController)
+    {
+        return false;
+    }
+
+    AMOBAMMOPlayerState* BuyerState = ResolveMOBAPlayerState(BuyerController);
+    if (!BuyerState)
+    {
+        return false;
+    }
+
+    // Validate item exists in catalog
+    FMOBAMMOVendorItem CatalogEntry;
+    if (!UMOBAMMOVendorCatalog::FindItem(ItemId, CatalogEntry))
+    {
+        PushCombatLog(FString::Printf(TEXT("%s: unknown item '%s'."), *BuyerState->GetCharacterName(), *ItemId));
+        return false;
+    }
+
+    // Proximity check
+    if (IsValid(VendorActor))
+    {
+        const APawn* Pawn = BuyerController->GetPawn();
+        if (Pawn)
+        {
+            const float DistSq = FVector::DistSquared(Pawn->GetActorLocation(), VendorActor->GetActorLocation());
+            if (DistSq > VendorPurchaseRange * VendorPurchaseRange)
+            {
+                PushCombatLog(FString::Printf(
+                    TEXT("%s is too far from the Vendor to shop (range %.0f)."),
+                    *BuyerState->GetCharacterName(),
+                    FMath::Sqrt(DistSq)
+                ));
+                return false;
+            }
+        }
+    }
+
+    // Afford check
+    if (BuyerState->GetGold() < CatalogEntry.Price)
+    {
+        PushCombatLog(FString::Printf(
+            TEXT("%s cannot afford %s (%d g needed, has %d g)."),
+            *BuyerState->GetCharacterName(),
+            *CatalogEntry.DisplayName,
+            CatalogEntry.Price,
+            BuyerState->GetGold()
+        ));
+        return false;
+    }
+
+    // Deduct gold
+    const bool bSpent = BuyerState->SpendGold(CatalogEntry.Price);
+    if (!bSpent)
+    {
+        return false;
+    }
+
+    // Grant item
+    BuyerState->GrantItem(ItemId, 1);
+
+    // Feedback
+    PushCombatLog(FString::Printf(
+        TEXT("%s purchased %s for %d g. Remaining gold: %d g."),
+        *BuyerState->GetCharacterName(),
+        *CatalogEntry.DisplayName,
+        CatalogEntry.Price,
+        BuyerState->GetGold()
+    ));
+
+    // Quest: buying from vendor
+    NotifyQuestEvent(BuyerController, EMOBAMMOQuestType::BuyFromVendor);
+
+    return true;
+}
+
 void AMOBAMMOGameMode::ScheduleTrainingMinionRespawn()
 {
     if (!HasAuthority())
@@ -282,6 +519,12 @@ void AMOBAMMOGameMode::StopTrainingMinionAutoAttackLoop()
     {
         World->GetTimerManager().ClearTimer(TrainingMinionAutoAttackTimerHandle);
     }
+}
+
+bool AMOBAMMOGameMode::HasActiveSession(AController* Controller) const
+{
+    const AMOBAMMOPlayerState* PlayerState = ResolveMOBAPlayerState(Controller);
+    return PlayerState && !PlayerState->GetSessionId().TrimStartAndEnd().IsEmpty() && !PlayerState->GetCharacterId().TrimStartAndEnd().IsEmpty();
 }
 
 void AMOBAMMOGameMode::TickTrainingMinionAutoAttack()
@@ -517,19 +760,20 @@ bool AMOBAMMOGameMode::RespawnPlayer(AController* TargetController)
     RestartPlayer(TargetController);
     ReturnControllerToArena(TargetController, TEXT("respawn"));
     InitializeDefaultAttributes(PlayerState);
-    PushCombatLog(FString::Printf(TEXT("%s used %s and respawned with full attributes."), *PlayerState->GetPlayerName(), *MOBAMMOAbilitySet::Reforge().Name));
+    const FMOBAMMOAbilityDefinition RespawnAbility = GetAbilityDefinitionForState(PlayerState, 4, MOBAMMOAbilitySet::Reforge());
+    PushCombatLog(FString::Printf(TEXT("%s used %s and respawned with full attributes."), *PlayerState->GetPlayerName(), *RespawnAbility.Name));
     SavePlayerProgress(TargetController);
     return true;
 }
 
 bool AMOBAMMOGameMode::CastDebugDamageSpell(AController* InstigatorController)
 {
-    const FMOBAMMOAbilityDefinition DamageAbility = MOBAMMOAbilitySet::ArcBurst();
     AMOBAMMOPlayerState* InstigatorState = ResolveMOBAPlayerState(InstigatorController);
     if (!InstigatorState)
     {
         return false;
     }
+    const FMOBAMMOAbilityDefinition DamageAbility = GetAbilityDefinitionForState(InstigatorState, 0, MOBAMMOAbilitySet::ArcBurst());
 
     if (IsTrainingDummySelected(InstigatorState))
     {
@@ -541,8 +785,11 @@ bool AMOBAMMOGameMode::CastDebugDamageSpell(AController* InstigatorController)
 
         const float ServerWorldTimeSeconds = GetWorld() ? GetWorld()->GetTimeSeconds() : 0.0f;
         const bool bHasArcCharge = InstigatorState->HasArcCharge(ServerWorldTimeSeconds);
+        const int32 DmgRank = InstigatorState->GetAbilityRank(0);
+        const float ScaledDmgPower    = RankScaledPower(DebugDamageSpellPower, DmgRank);
+        const float ScaledDmgCooldown = RankScaledCooldown(DebugDamageCooldownDuration, DmgRank);
         const float DamageManaCost = FMath::Max(0.0f, DebugDamageSpellManaCost - (bHasArcCharge ? DebugArcChargeManaDiscount : 0.0f));
-        const float DamagePower = DebugDamageSpellPower + (bHasArcCharge ? DebugArcChargeBonusDamage : 0.0f);
+        const float DamagePower = ScaledDmgPower + (bHasArcCharge ? DebugArcChargeBonusDamage : 0.0f);
         const float DamageCooldownRemaining = InstigatorState->GetDamageCooldownRemaining(ServerWorldTimeSeconds);
         if (DamageCooldownRemaining > KINDA_SMALL_NUMBER)
         {
@@ -557,7 +804,7 @@ bool AMOBAMMOGameMode::CastDebugDamageSpell(AController* InstigatorController)
         }
 
         const float DamageApplied = MOBAGameState->ApplyDamageToTrainingDummy(DamagePower);
-        InstigatorState->StartDamageCooldown(DebugDamageCooldownDuration, ServerWorldTimeSeconds);
+        InstigatorState->StartDamageCooldown(ScaledDmgCooldown, ServerWorldTimeSeconds);
         if (bHasArcCharge)
         {
             InstigatorState->StartArcCharge(0.0f, ServerWorldTimeSeconds);
@@ -578,7 +825,16 @@ bool AMOBAMMOGameMode::CastDebugDamageSpell(AController* InstigatorController)
         {
             InstigatorState->RecordKill();
             PushCombatLog(FString::Printf(TEXT("%s disabled the Training Dummy. It will reset on the next hit."), *InstigatorState->GetPlayerName()));
+            GrantKillReward(InstigatorController, KillXPTrainingDummy, KillGoldTrainingDummy, MOBAGameState->GetTrainingDummyName());
+            NotifyQuestEvent(InstigatorController, EMOBAMMOQuestType::KillTrainingDummy);
         }
+
+        // DealDamage + UseAbility quest events
+        if (DamageApplied > 0.0f)
+        {
+            NotifyQuestEvent(InstigatorController, EMOBAMMOQuestType::DealDamage, FMath::RoundToInt(DamageApplied));
+        }
+        NotifyQuestEvent(InstigatorController, EMOBAMMOQuestType::UseAbility);
 
         SavePlayerProgress(InstigatorController);
         return DamageApplied > 0.0f;
@@ -595,8 +851,11 @@ bool AMOBAMMOGameMode::CastDebugDamageSpell(AController* InstigatorController)
 
         const float ServerWorldTimeSeconds = GetWorld() ? GetWorld()->GetTimeSeconds() : 0.0f;
         const bool bHasArcCharge = InstigatorState->HasArcCharge(ServerWorldTimeSeconds);
+        const int32 DmgRankM = InstigatorState->GetAbilityRank(0);
+        const float ScaledDmgPowerM    = RankScaledPower(DebugDamageSpellPower, DmgRankM);
+        const float ScaledDmgCooldownM = RankScaledCooldown(DebugDamageCooldownDuration, DmgRankM);
         const float DamageManaCost = FMath::Max(0.0f, DebugDamageSpellManaCost - (bHasArcCharge ? DebugArcChargeManaDiscount : 0.0f));
-        const float DamagePower = DebugDamageSpellPower + (bHasArcCharge ? DebugArcChargeBonusDamage : 0.0f);
+        const float DamagePower = ScaledDmgPowerM + (bHasArcCharge ? DebugArcChargeBonusDamage : 0.0f);
         const float DamageCooldownRemaining = InstigatorState->GetDamageCooldownRemaining(ServerWorldTimeSeconds);
         if (DamageCooldownRemaining > KINDA_SMALL_NUMBER)
         {
@@ -613,7 +872,7 @@ bool AMOBAMMOGameMode::CastDebugDamageSpell(AController* InstigatorController)
         const float PreviousHealth = TrainingMinionActor->GetCurrentHealth();
         UGameplayStatics::ApplyDamage(TrainingMinionActor, DamagePower, InstigatorController, InstigatorController ? InstigatorController->GetPawn() : nullptr, nullptr);
         const float DamageApplied = FMath::Max(0.0f, PreviousHealth - TrainingMinionActor->GetCurrentHealth());
-        InstigatorState->StartDamageCooldown(DebugDamageCooldownDuration, ServerWorldTimeSeconds);
+        InstigatorState->StartDamageCooldown(ScaledDmgCooldownM, ServerWorldTimeSeconds);
         if (bHasArcCharge)
         {
             InstigatorState->StartArcCharge(0.0f, ServerWorldTimeSeconds);
@@ -633,6 +892,9 @@ bool AMOBAMMOGameMode::CastDebugDamageSpell(AController* InstigatorController)
         if (!TrainingMinionActor->IsAlive())
         {
             InstigatorState->RecordKill();
+            GrantMinionLootToPlayer(InstigatorController);
+            GrantKillReward(InstigatorController, KillXPTrainingMinion, KillGoldTrainingMinion, AMOBAMMOTrainingMinionActor::GetTrainingMinionName());
+            NotifyQuestEvent(InstigatorController, EMOBAMMOQuestType::KillTrainingMinion);
             StopTrainingMinionAutoAttackLoop();
             ScheduleTrainingMinionRespawn();
             PushCombatLog(FString::Printf(
@@ -646,6 +908,13 @@ bool AMOBAMMOGameMode::CastDebugDamageSpell(AController* InstigatorController)
         {
             TriggerTrainingMinionCounterAttack(InstigatorController);
         }
+
+        // DealDamage + UseAbility quest events
+        if (DamageApplied > 0.0f)
+        {
+            NotifyQuestEvent(InstigatorController, EMOBAMMOQuestType::DealDamage, FMath::RoundToInt(DamageApplied));
+        }
+        NotifyQuestEvent(InstigatorController, EMOBAMMOQuestType::UseAbility);
 
         SavePlayerProgress(InstigatorController);
         return DamageApplied > 0.0f;
@@ -716,6 +985,7 @@ bool AMOBAMMOGameMode::CastDebugDamageSpell(AController* InstigatorController)
             *InstigatorState->GetPlayerName(),
             DebugRespawnDelayDuration
         ));
+        GrantKillReward(InstigatorController, KillXPPlayer, KillGoldPlayer, TargetState->GetPlayerName());
     }
     InstigatorState->StartDamageCooldown(DebugDamageCooldownDuration, ServerWorldTimeSeconds);
     if (bHasArcCharge)
@@ -729,12 +999,12 @@ bool AMOBAMMOGameMode::CastDebugDamageSpell(AController* InstigatorController)
 
 bool AMOBAMMOGameMode::CastDebugHealSpell(AController* InstigatorController)
 {
-    const FMOBAMMOAbilityDefinition HealAbility = MOBAMMOAbilitySet::Renew();
     AMOBAMMOPlayerState* InstigatorState = ResolveMOBAPlayerState(InstigatorController);
     if (!InstigatorState)
     {
         return false;
     }
+    const FMOBAMMOAbilityDefinition HealAbility = GetAbilityDefinitionForState(InstigatorState, 1, MOBAMMOAbilitySet::Renew());
 
     const float ServerWorldTimeSeconds = GetWorld() ? GetWorld()->GetTimeSeconds() : 0.0f;
     const float HealCooldownRemaining = InstigatorState->GetHealCooldownRemaining(ServerWorldTimeSeconds);
@@ -750,7 +1020,10 @@ bool AMOBAMMOGameMode::CastDebugHealSpell(AController* InstigatorController)
         return false;
     }
 
-    const float HealingApplied = InstigatorState->ApplyHealing(DebugHealSpellPower);
+    const int32 HealRank = InstigatorState->GetAbilityRank(1);
+    const float ScaledHealPower    = RankScaledPower(DebugHealSpellPower, HealRank);
+    const float ScaledHealCooldown = RankScaledCooldown(DebugHealCooldownDuration, HealRank);
+    const float HealingApplied = InstigatorState->ApplyHealing(ScaledHealPower);
     if (HealingApplied > 0.0f)
     {
         InstigatorState->PushIncomingCombatFeedback(FString::Printf(TEXT("+%.0f %s"), HealingApplied, *HealAbility.Name), 1.25f, true);
@@ -763,19 +1036,20 @@ bool AMOBAMMOGameMode::CastDebugHealSpell(AController* InstigatorController)
         InstigatorState->GetCurrentHealth(),
         InstigatorState->GetMaxHealth()
     ));
-    InstigatorState->StartHealCooldown(DebugHealCooldownDuration, ServerWorldTimeSeconds);
+    InstigatorState->StartHealCooldown(ScaledHealCooldown, ServerWorldTimeSeconds);
+    NotifyQuestEvent(InstigatorController, EMOBAMMOQuestType::UseAbility);
     SavePlayerProgress(InstigatorController);
     return HealingApplied > 0.0f;
 }
 
 bool AMOBAMMOGameMode::TriggerDebugManaRestore(AController* InstigatorController)
 {
-    const FMOBAMMOAbilityDefinition UtilityAbility = MOBAMMOAbilitySet::ManaSurge();
     AMOBAMMOPlayerState* InstigatorState = ResolveMOBAPlayerState(InstigatorController);
     if (!InstigatorState)
     {
         return false;
     }
+    const FMOBAMMOAbilityDefinition UtilityAbility = GetAbilityDefinitionForState(InstigatorState, 3, MOBAMMOAbilitySet::ManaSurge());
 
     const float ServerWorldTimeSeconds = GetWorld() ? GetWorld()->GetTimeSeconds() : 0.0f;
     const float CooldownRemaining = InstigatorState->GetManaSurgeCooldownRemaining(ServerWorldTimeSeconds);
@@ -790,7 +1064,10 @@ bool AMOBAMMOGameMode::TriggerDebugManaRestore(AController* InstigatorController
         return false;
     }
 
-    const float ManaRestored = InstigatorState->RestoreMana(DebugManaRestoreAmount);
+    const int32 SurgeRank = InstigatorState->GetAbilityRank(3);
+    const float ScaledSurgePower    = RankScaledPower(DebugManaRestoreAmount, SurgeRank);
+    const float ScaledSurgeCooldown = RankScaledCooldown(DebugManaSurgeCooldownDuration, SurgeRank);
+    const float ManaRestored = InstigatorState->RestoreMana(ScaledSurgePower);
     if (ManaRestored > 0.0f)
     {
         InstigatorState->PushIncomingCombatFeedback(FString::Printf(TEXT("+%.0f %s"), ManaRestored, *UtilityAbility.Name), 1.1f, true);
@@ -803,19 +1080,21 @@ bool AMOBAMMOGameMode::TriggerDebugManaRestore(AController* InstigatorController
         InstigatorState->GetCurrentMana(),
         InstigatorState->GetMaxMana()
     ));
-    InstigatorState->StartManaSurgeCooldown(DebugManaSurgeCooldownDuration, ServerWorldTimeSeconds);
+    InstigatorState->StartManaSurgeCooldown(ScaledSurgeCooldown, ServerWorldTimeSeconds);
+    NotifyQuestEvent(InstigatorController, EMOBAMMOQuestType::UseAbility);
     SavePlayerProgress(InstigatorController);
     return ManaRestored > 0.0f;
 }
 
 bool AMOBAMMOGameMode::CastDebugDrainSpell(AController* InstigatorController)
 {
-    const FMOBAMMOAbilityDefinition DrainAbility = MOBAMMOAbilitySet::DrainPulse();
     AMOBAMMOPlayerState* InstigatorState = ResolveMOBAPlayerState(InstigatorController);
     if (!InstigatorState)
     {
         return false;
     }
+    const FMOBAMMOAbilityDefinition DrainAbility = GetAbilityDefinitionForState(InstigatorState, 2, MOBAMMOAbilitySet::DrainPulse());
+    const FMOBAMMOAbilityDefinition DamageAbility = GetAbilityDefinitionForState(InstigatorState, 0, MOBAMMOAbilitySet::ArcBurst());
 
     if (IsTrainingDummySelected(InstigatorState))
     {
@@ -850,13 +1129,15 @@ bool AMOBAMMOGameMode::CastDebugDrainSpell(AController* InstigatorController)
         InstigatorState->StartArcCharge(DebugArcChargeDuration, ServerWorldTimeSeconds);
         InstigatorState->StartDrainCooldown(DebugDrainCooldownDuration, ServerWorldTimeSeconds);
         PushCombatLog(FString::Printf(
-            TEXT("%s cast %s on %s, draining %.0f mana, restoring %.0f mana, and empowering Arc Burst."),
+            TEXT("%s cast %s on %s, draining %.0f mana, restoring %.0f mana, and empowering %s."),
             *InstigatorState->GetPlayerName(),
             *DrainAbility.Name,
             *MOBAGameState->GetTrainingDummyName(),
             DrainedMana,
-            ManaRecovered
+            ManaRecovered,
+            *DamageAbility.Name
         ));
+        NotifyQuestEvent(InstigatorController, EMOBAMMOQuestType::UseAbility);
         SavePlayerProgress(InstigatorController);
         return ManaRecovered > 0.0f || DrainedMana > 0.0f;
     }
@@ -905,12 +1186,13 @@ bool AMOBAMMOGameMode::CastDebugDrainSpell(AController* InstigatorController)
     InstigatorState->PushIncomingCombatFeedback(FString::Printf(TEXT("+%.0f MP %s"), ManaRecovered, *DrainAbility.Name), 1.1f, true);
     InstigatorState->StartArcCharge(DebugArcChargeDuration, ServerWorldTimeSeconds);
     PushCombatLog(FString::Printf(
-        TEXT("%s cast %s on %s, draining %.0f mana, restoring %.0f mana, and empowering Arc Burst."),
+        TEXT("%s cast %s on %s, draining %.0f mana, restoring %.0f mana, and empowering %s."),
         *InstigatorState->GetPlayerName(),
         *DrainAbility.Name,
         *TargetState->GetPlayerName(),
         DrainedMana,
-        ManaRecovered
+        ManaRecovered,
+        *DamageAbility.Name
     ));
     InstigatorState->StartDrainCooldown(DebugDrainCooldownDuration, ServerWorldTimeSeconds);
     SavePlayerProgress(InstigatorController);
@@ -930,6 +1212,180 @@ bool AMOBAMMOGameMode::CastDebugGrantItem(AController* InstigatorController, con
     PushCombatLog(FString::Printf(TEXT("%s gained %dx %s."), *InstigatorState->GetPlayerName(), Quantity, *ItemId));
     SavePlayerProgress(InstigatorController);
     return true;
+}
+
+bool AMOBAMMOGameMode::UseFirstInventoryConsumable(AController* InstigatorController)
+{
+    AMOBAMMOPlayerState* InstigatorState = ResolveMOBAPlayerState(InstigatorController);
+    if (!InstigatorState)
+    {
+        return false;
+    }
+
+    FString SelectedItemId;
+    float SelectedHealthRestore = 0.0f;
+    float SelectedManaRestore = 0.0f;
+
+    for (const FMOBAMMOInventoryItem& Item : InstigatorState->GetInventoryItems())
+    {
+        float HealthRestore = 0.0f;
+        float ManaRestore = 0.0f;
+        if (!TryGetConsumableUseForItem(Item.ItemId, HealthRestore, ManaRestore))
+        {
+            continue;
+        }
+
+        const bool bCanRestoreHealth = HealthRestore > 0.0f && InstigatorState->GetCurrentHealth() < InstigatorState->GetMaxHealth();
+        const bool bCanRestoreMana = ManaRestore > 0.0f && InstigatorState->GetCurrentMana() < InstigatorState->GetMaxMana();
+        if (!bCanRestoreHealth && !bCanRestoreMana)
+        {
+            continue;
+        }
+
+        SelectedItemId = Item.ItemId;
+        SelectedHealthRestore = HealthRestore;
+        SelectedManaRestore = ManaRestore;
+        break;
+    }
+
+    if (SelectedItemId.IsEmpty())
+    {
+        PushCombatLog(FString::Printf(TEXT("%s has no useful consumable right now."), *InstigatorState->GetPlayerName()));
+        return false;
+    }
+
+    const float HealthRecovered = SelectedHealthRestore > 0.0f ? InstigatorState->ApplyHealing(SelectedHealthRestore) : 0.0f;
+    const float ManaRecovered = SelectedManaRestore > 0.0f ? InstigatorState->RestoreMana(SelectedManaRestore) : 0.0f;
+    if (HealthRecovered <= 0.0f && ManaRecovered <= 0.0f)
+    {
+        return false;
+    }
+
+    if (!InstigatorState->ConsumeInventoryItem(SelectedItemId, 1))
+    {
+        return false;
+    }
+
+    const FString RestoreText = HealthRecovered > 0.0f
+        ? FString::Printf(TEXT("+%.0f HP"), HealthRecovered)
+        : FString::Printf(TEXT("+%.0f MP"), ManaRecovered);
+    PushCombatLog(FString::Printf(TEXT("%s used %s (%s)."), *InstigatorState->GetPlayerName(), *GetInventoryItemDisplayName(SelectedItemId), *RestoreText));
+    SavePlayerProgress(InstigatorController);
+    return true;
+}
+
+bool AMOBAMMOGameMode::ToggleEquipFirstInventoryItem(AController* InstigatorController)
+{
+    AMOBAMMOPlayerState* InstigatorState = ResolveMOBAPlayerState(InstigatorController);
+    if (!InstigatorState)
+    {
+        return false;
+    }
+
+    for (const FMOBAMMOInventoryItem& Item : InstigatorState->GetInventoryItems())
+    {
+        int32 EquipSlot = -1;
+        if (TryGetEquipSlotForItem(Item.ItemId, EquipSlot) && Item.SlotIndex != EquipSlot)
+        {
+            if (InstigatorState->EquipInventoryItem(Item.ItemId, EquipSlot))
+            {
+                PushCombatLog(FString::Printf(TEXT("%s equipped %s."), *InstigatorState->GetPlayerName(), *GetInventoryItemDisplayName(Item.ItemId)));
+                SavePlayerProgress(InstigatorController);
+                return true;
+            }
+        }
+    }
+
+    for (const FMOBAMMOInventoryItem& Item : InstigatorState->GetInventoryItems())
+    {
+        int32 EquipSlot = -1;
+        if (TryGetEquipSlotForItem(Item.ItemId, EquipSlot) && Item.SlotIndex == EquipSlot)
+        {
+            if (InstigatorState->UnequipInventoryItem(Item.ItemId))
+            {
+                PushCombatLog(FString::Printf(TEXT("%s unequipped %s."), *InstigatorState->GetPlayerName(), *GetInventoryItemDisplayName(Item.ItemId)));
+                SavePlayerProgress(InstigatorController);
+                return true;
+            }
+        }
+    }
+
+    PushCombatLog(FString::Printf(TEXT("%s has no equippable item."), *InstigatorState->GetPlayerName()));
+    return false;
+}
+
+void AMOBAMMOGameMode::GrantKillExperience(AController* KillerController, int32 XPAmount, const FString& TargetName)
+{
+    GrantKillReward(KillerController, XPAmount, 0, TargetName);
+}
+
+void AMOBAMMOGameMode::GrantKillReward(AController* KillerController, int32 XPAmount, int32 GoldAmount, const FString& TargetName)
+{
+    AMOBAMMOPlayerState* KillerState = ResolveMOBAPlayerState(KillerController);
+    if (!KillerState || (XPAmount <= 0 && GoldAmount <= 0))
+    {
+        return;
+    }
+
+    int32 LevelsGained = 0;
+    if (XPAmount > 0 && !KillerState->IsMaxLevel())
+    {
+        LevelsGained = KillerState->GrantExperience(XPAmount);
+    }
+
+    int32 GoldGranted = 0;
+    if (GoldAmount > 0)
+    {
+        GoldGranted = KillerState->GrantGold(GoldAmount);
+    }
+
+    // Combined reward feed entry
+    if (XPAmount > 0 && GoldGranted > 0)
+    {
+        PushCombatLog(FString::Printf(
+            TEXT("%s defeated %s. (+%d XP, +%d gold)"),
+            *KillerState->GetPlayerName(), *TargetName, XPAmount, GoldGranted));
+    }
+    else if (XPAmount > 0)
+    {
+        PushCombatLog(FString::Printf(
+            TEXT("%s gained %d XP for defeating %s."),
+            *KillerState->GetPlayerName(), XPAmount, *TargetName));
+    }
+    else if (GoldGranted > 0)
+    {
+        PushCombatLog(FString::Printf(
+            TEXT("%s looted %d gold from %s."),
+            *KillerState->GetPlayerName(), GoldGranted, *TargetName));
+    }
+
+    if (LevelsGained > 0)
+    {
+        PushCombatLog(FString::Printf(
+            TEXT("[LEVEL UP] %s reached Level %d! (+%d HP, +%d MP)"),
+            *KillerState->GetPlayerName(),
+            KillerState->GetCharacterLevel(),
+            int32(LevelsGained * 15),
+            int32(LevelsGained * 8)));
+    }
+}
+
+void AMOBAMMOGameMode::GrantMinionLootToPlayer(AController* KillerController)
+{
+    AMOBAMMOPlayerState* KillerState = ResolveMOBAPlayerState(KillerController);
+    if (!KillerState)
+    {
+        return;
+    }
+
+    KillerState->GrantItem(TEXT("sparring_token"), 1);
+    PushCombatLog(FString::Printf(TEXT("%s looted 1x Sparring Token."), *KillerState->GetPlayerName()));
+
+    if (FMath::RandRange(1, 100) <= 30)
+    {
+        KillerState->GrantItem(TEXT("health_potion_small"), 1);
+        PushCombatLog(FString::Printf(TEXT("%s found 1x Small Health Potion."), *KillerState->GetPlayerName()));
+    }
 }
 
 void AMOBAMMOGameMode::UpdateConnectedPlayerCount()
@@ -984,6 +1440,7 @@ void AMOBAMMOGameMode::ApplyPlayerSessionData(APlayerController* NewPlayerContro
     int32 TextureDetail = 88;
     int32 KillCount = 0;
     int32 DeathCount = 0;
+    int32 Gold = 0;
     float CurrentHealth = DefaultMaxHealth;
     float MaxHealth = DefaultMaxHealth;
     float CurrentMana = DefaultMaxMana;
@@ -1007,6 +1464,7 @@ void AMOBAMMOGameMode::ApplyPlayerSessionData(APlayerController* NewPlayerContro
     TryReadFloatOption(Options, TEXT("MaxMana"), MaxMana);
     TryReadIntOption(Options, TEXT("KillCount"), KillCount);
     TryReadIntOption(Options, TEXT("DeathCount"), DeathCount);
+    TryReadIntOption(Options, TEXT("Gold"), Gold);
     SavedWorldPosition = ClampToArenaBounds(FVector(SavedPositionX, SavedPositionY, SavedPositionZ));
 
     UE_LOG(LogTemp, Log, TEXT("[Persistence] Applying session data. CharacterId=%s SessionId=%s Position=%s Health=%.1f/%.1f Mana=%.1f/%.1f"),
@@ -1020,7 +1478,7 @@ void AMOBAMMOGameMode::ApplyPlayerSessionData(APlayerController* NewPlayerContro
 
     MOBAPlayerState->ApplySessionIdentity(AccountId, CharacterId, SessionId, CharacterName, ClassId, CharacterLevel);
     MOBAPlayerState->ApplyAppearanceSelection(PresetId, ColorIndex, Shade, Transparent, TextureDetail);
-    MOBAPlayerState->ApplyPersistentCharacterState(CharacterExperience, SavedWorldPosition, CurrentHealth, MaxHealth, CurrentMana, MaxMana, KillCount, DeathCount);
+    MOBAPlayerState->ApplyPersistentCharacterState(CharacterExperience, SavedWorldPosition, CurrentHealth, MaxHealth, CurrentMana, MaxMana, KillCount, DeathCount, Gold);
 
     const FString InventoryString = ReadOption(Options, TEXT("Inventory"));
     if (!InventoryString.IsEmpty())
@@ -1439,4 +1897,114 @@ void AMOBAMMOGameMode::PushCombatLog(const FString& CombatLog) const
         MOBAGameState->SetLastCombatLog(CombatLog);
         MOBAGameState->PushCombatFeedEntry(CombatLog);
     }
+}
+
+// ─────────────────────────────────────────────────────────────
+// Quest System
+// ─────────────────────────────────────────────────────────────
+
+void AMOBAMMOGameMode::NotifyQuestEvent(AController* Controller, EMOBAMMOQuestType Type, int32 Amount)
+{
+    AMOBAMMOPlayerState* PS = ResolveMOBAPlayerState(Controller);
+    if (!PS)
+    {
+        return;
+    }
+
+    const TArray<FString> Completed = PS->AdvanceQuestProgress(Type, Amount);
+    for (const FString& QuestId : Completed)
+    {
+        GrantQuestReward(Controller, QuestId);
+    }
+}
+
+// ─────────────────────────────────────────────────────────────
+// Skill Point System
+// ─────────────────────────────────────────────────────────────
+
+float AMOBAMMOGameMode::RankScaledPower(float BasePower, int32 Rank) const
+{
+    // +20% of base power per rank above 1 (rank 5 → 180% of base).
+    const int32 ClampedRank = FMath::Clamp(Rank, 1, AMOBAMMOPlayerState::MaxAbilityRank);
+    return BasePower * (1.0f + (ClampedRank - 1) * 0.20f);
+}
+
+float AMOBAMMOGameMode::RankScaledCooldown(float BaseCooldown, int32 Rank) const
+{
+    // -10% cooldown per rank above 1 (rank 5 → 60% of base, min 0.5s).
+    const int32 ClampedRank = FMath::Clamp(Rank, 1, AMOBAMMOPlayerState::MaxAbilityRank);
+    return FMath::Max(0.5f, BaseCooldown * (1.0f - (ClampedRank - 1) * 0.10f));
+}
+
+bool AMOBAMMOGameMode::HandleSpendSkillPoint(AController* Controller, int32 AbilitySlotIndex)
+{
+    AMOBAMMOPlayerState* PS = ResolveMOBAPlayerState(Controller);
+    if (!PS)
+    {
+        return false;
+    }
+
+    if (!PS->CanUpgradeAbility(AbilitySlotIndex))
+    {
+        const FString Reason = (PS->GetSkillPoints() <= 0)
+            ? TEXT("no skill points available")
+            : TEXT("ability is already at max rank");
+        PushCombatLog(FString::Printf(TEXT("%s tried to upgrade ability %d but %s."),
+            *PS->GetPlayerName(), AbilitySlotIndex + 1, *Reason));
+        return false;
+    }
+
+    PS->SpendSkillPoint(AbilitySlotIndex);
+
+    PushCombatLog(FString::Printf(
+        TEXT("[UPGRADE] %s upgraded Ability %d to Rank %d! (%d SP remaining)"),
+        *PS->GetPlayerName(),
+        AbilitySlotIndex + 1,
+        PS->GetAbilityRank(AbilitySlotIndex),
+        PS->GetSkillPoints()
+    ));
+
+    return true;
+}
+
+void AMOBAMMOGameMode::GrantQuestReward(AController* Controller, const FString& QuestId)
+{
+    AMOBAMMOPlayerState* PS = ResolveMOBAPlayerState(Controller);
+    if (!PS)
+    {
+        return;
+    }
+
+    FMOBAMMOQuestDefinition Def;
+    if (!UMOBAMMOQuestCatalog::FindQuest(QuestId, Def))
+    {
+        return;
+    }
+
+    int32 LevelsGained = 0;
+    if (Def.RewardXP > 0 && !PS->IsMaxLevel())
+    {
+        LevelsGained = PS->GrantExperience(Def.RewardXP);
+    }
+
+    if (Def.RewardGold > 0)
+    {
+        PS->GrantGold(Def.RewardGold);
+    }
+
+    FString RewardMsg = FString::Printf(
+        TEXT("[QUEST] %s completed \"%s\"!  +%d XP"),
+        *PS->GetPlayerName(), *Def.DisplayName, Def.RewardXP);
+
+    if (Def.RewardGold > 0)
+    {
+        RewardMsg += FString::Printf(TEXT("  +%d Gold"), Def.RewardGold);
+    }
+
+    if (LevelsGained > 0)
+    {
+        RewardMsg += FString::Printf(TEXT("  [LEVEL UP → %d]"), PS->GetCharacterLevel());
+    }
+
+    PushCombatLog(RewardMsg);
 }

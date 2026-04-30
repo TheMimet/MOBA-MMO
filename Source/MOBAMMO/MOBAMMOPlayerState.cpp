@@ -1,10 +1,148 @@
 #include "MOBAMMOPlayerState.h"
 
 #include "Net/UnrealNetwork.h"
+#include "MOBAMMOQuestCatalog.h"
+
+namespace
+{
+    int32 GetInventoryMaxStackForItem(const FString& ItemId)
+    {
+        if (ItemId == TEXT("health_potion_small") || ItemId == TEXT("mana_potion_small"))
+        {
+            return 20;
+        }
+        if (ItemId == TEXT("sparring_token"))
+        {
+            return 99;
+        }
+        if (ItemId == TEXT("iron_sword")
+            || ItemId == TEXT("crystal_staff")
+            || ItemId == TEXT("leather_helm")
+            || ItemId == TEXT("chain_body")
+            || ItemId == TEXT("swift_boots")
+            || ItemId == TEXT("mana_ring"))
+        {
+            return 1;
+        }
+
+        return 0;
+    }
+
+    bool IsKnownEquipmentSlotForItem(const FString& ItemId, int32 SlotIndex)
+    {
+        if (ItemId == TEXT("iron_sword") || ItemId == TEXT("crystal_staff"))
+        {
+            return SlotIndex == 0;
+        }
+        if (ItemId == TEXT("leather_helm"))
+        {
+            return SlotIndex == 2;
+        }
+        if (ItemId == TEXT("chain_body"))
+        {
+            return SlotIndex == 3;
+        }
+        if (ItemId == TEXT("swift_boots"))
+        {
+            return SlotIndex == 4;
+        }
+        if (ItemId == TEXT("mana_ring"))
+        {
+            return SlotIndex == 5;
+        }
+
+        return false;
+    }
+
+    void GetEquipmentBonusesForItem(const FString& ItemId, float& OutMaxHealthBonus, float& OutMaxManaBonus)
+    {
+        OutMaxHealthBonus = 0.0f;
+        OutMaxManaBonus = 0.0f;
+
+        if (ItemId == TEXT("iron_sword"))
+        {
+            OutMaxHealthBonus = 10.0f;
+        }
+        else if (ItemId == TEXT("crystal_staff"))
+        {
+            OutMaxManaBonus = 20.0f;
+        }
+        else if (ItemId == TEXT("leather_helm"))
+        {
+            OutMaxHealthBonus = 15.0f;
+        }
+        else if (ItemId == TEXT("chain_body"))
+        {
+            OutMaxHealthBonus = 30.0f;
+        }
+        else if (ItemId == TEXT("swift_boots"))
+        {
+            OutMaxManaBonus = 10.0f;
+        }
+        else if (ItemId == TEXT("mana_ring"))
+        {
+            OutMaxHealthBonus = 10.0f;
+            OutMaxManaBonus = 25.0f;
+        }
+    }
+
+    void NormalizeRuntimeInventoryItems(const TArray<FMOBAMMOInventoryItem>& InItems, TArray<FMOBAMMOInventoryItem>& OutItems)
+    {
+        OutItems.Reset();
+        TSet<int32> OccupiedEquipSlots;
+
+        auto AddNormalizedStack = [&OutItems](const FString& ItemId, int32 Quantity, int32 SlotIndex)
+        {
+            OutItems.Add(FMOBAMMOInventoryItem(ItemId, Quantity, SlotIndex));
+        };
+
+        for (const FMOBAMMOInventoryItem& Item : InItems)
+        {
+            const int32 MaxStack = GetInventoryMaxStackForItem(Item.ItemId);
+            if (MaxStack <= 0 || Item.Quantity <= 0)
+            {
+                continue;
+            }
+
+            int32 SlotIndex = -1;
+            if (IsKnownEquipmentSlotForItem(Item.ItemId, Item.SlotIndex) && !OccupiedEquipSlots.Contains(Item.SlotIndex))
+            {
+                SlotIndex = Item.SlotIndex;
+                OccupiedEquipSlots.Add(SlotIndex);
+            }
+
+            int32 RemainingQuantity = Item.Quantity;
+            if (MaxStack <= 1)
+            {
+                while (RemainingQuantity > 0)
+                {
+                    AddNormalizedStack(Item.ItemId, 1, SlotIndex);
+                    SlotIndex = -1;
+                    --RemainingQuantity;
+                }
+                continue;
+            }
+
+            while (RemainingQuantity > 0)
+            {
+                const int32 StackQuantity = FMath::Min(MaxStack, RemainingQuantity);
+                AddNormalizedStack(Item.ItemId, StackQuantity, -1);
+                RemainingQuantity -= StackQuantity;
+            }
+        }
+    }
+}
 
 AMOBAMMOPlayerState::AMOBAMMOPlayerState()
 {
     bReplicates = true;
+
+    // Replicate at 10 Hz — PlayerState holds persistent session data that
+    // doesn't need frame-rate-level updates (default UE is 100 Hz).
+    SetNetUpdateFrequency(10.0f);
+
+    // All 4 abilities start at rank 1.
+    AbilityRanks.Init(1, 4);
 }
 
 void AMOBAMMOPlayerState::ApplySessionIdentity(const FString& InAccountId, const FString& InCharacterId, const FString& InSessionId, const FString& InCharacterName, const FString& InClassId, int32 InLevel)
@@ -40,7 +178,7 @@ void AMOBAMMOPlayerState::SetPersistenceStatus(const FString& InStatus, const FS
     BroadcastStateUpdated();
 }
 
-void AMOBAMMOPlayerState::ApplyPersistentCharacterState(int32 InExperience, const FVector& InSavedWorldPosition, float InCurrentHealth, float InMaxHealth, float InCurrentMana, float InMaxMana, int32 InKillCount, int32 InDeathCount)
+void AMOBAMMOPlayerState::ApplyPersistentCharacterState(int32 InExperience, const FVector& InSavedWorldPosition, float InCurrentHealth, float InMaxHealth, float InCurrentMana, float InMaxMana, int32 InKillCount, int32 InDeathCount, int32 InGold)
 {
     if (!HasAuthority())
     {
@@ -50,11 +188,14 @@ void AMOBAMMOPlayerState::ApplyPersistentCharacterState(int32 InExperience, cons
     CharacterExperience = FMath::Max(0, InExperience);
     SavedWorldPosition = InSavedWorldPosition;
     MaxHealth = FMath::Max(1.0f, InMaxHealth);
-    CurrentHealth = FMath::Clamp(InCurrentHealth, 0.0f, MaxHealth);
+    EquipmentMaxHealthBonus = 0.0f;
+    EquipmentMaxManaBonus = 0.0f;
+    CurrentHealth = FMath::Clamp(InCurrentHealth, 0.0f, GetMaxHealth());
     MaxMana = FMath::Max(0.0f, InMaxMana);
-    CurrentMana = FMath::Clamp(InCurrentMana, 0.0f, MaxMana);
+    CurrentMana = FMath::Clamp(InCurrentMana, 0.0f, GetMaxMana());
     KillCount = FMath::Max(0, InKillCount);
     DeathCount = FMath::Max(0, InDeathCount);
+    Gold = FMath::Max(0, InGold);
     bHasPersistentCharacterSnapshot = true;
     bPersistentSpawnLocationConsumed = false;
     ForceNetUpdate();
@@ -68,8 +209,9 @@ void AMOBAMMOPlayerState::ApplyPersistentInventory(const TArray<FMOBAMMOInventor
         return;
     }
 
-    InventoryArray.Items = InInventoryItems;
+    NormalizeRuntimeInventoryItems(InInventoryItems, InventoryArray.Items);
     InventoryArray.MarkArrayDirty();
+    RecalculateEquipmentBonusesFromInventory();
     ForceNetUpdate();
     BroadcastStateUpdated();
 }
@@ -98,6 +240,8 @@ void AMOBAMMOPlayerState::InitializeAttributes(float InMaxHealth, float InMaxMan
     }
 
     MaxHealth = FMath::Max(1.0f, InMaxHealth);
+    EquipmentMaxHealthBonus = 0.0f;
+    EquipmentMaxManaBonus = 0.0f;
     CurrentHealth = MaxHealth;
     MaxMana = FMath::Max(0.0f, InMaxMana);
     CurrentMana = MaxMana;
@@ -109,6 +253,28 @@ void AMOBAMMOPlayerState::InitializeAttributes(float InMaxHealth, float InMaxMan
     RespawnAvailableServerTime = 0.0f;
     ForceNetUpdate();
     BroadcastStateUpdated();
+}
+
+void AMOBAMMOPlayerState::SetEquipmentBonuses(float MaxHealthBonus, float MaxManaBonus)
+{
+    if (!HasAuthority())
+    {
+        return;
+    }
+
+    const float PreviousMaxHealth = GetMaxHealth();
+    const float PreviousMaxMana = GetMaxMana();
+
+    EquipmentMaxHealthBonus = FMath::Max(0.0f, MaxHealthBonus);
+    EquipmentMaxManaBonus = FMath::Max(0.0f, MaxManaBonus);
+    CurrentHealth = FMath::Clamp(CurrentHealth, 0.0f, GetMaxHealth());
+    CurrentMana = FMath::Clamp(CurrentMana, 0.0f, GetMaxMana());
+
+    if (!FMath::IsNearlyEqual(PreviousMaxHealth, GetMaxHealth()) || !FMath::IsNearlyEqual(PreviousMaxMana, GetMaxMana()))
+    {
+        ForceNetUpdate();
+        BroadcastStateUpdated();
+    }
 }
 
 void AMOBAMMOPlayerState::SetSelectedTargetIdentity(const FString& InCharacterId, const FString& InCharacterName)
@@ -144,7 +310,7 @@ void AMOBAMMOPlayerState::SetCurrentHealth(float NewHealth)
         return;
     }
 
-    CurrentHealth = FMath::Clamp(NewHealth, 0.0f, MaxHealth);
+    CurrentHealth = FMath::Clamp(NewHealth, 0.0f, GetMaxHealth());
     ForceNetUpdate();
     BroadcastStateUpdated();
 }
@@ -156,7 +322,7 @@ void AMOBAMMOPlayerState::SetCurrentMana(float NewMana)
         return;
     }
 
-    CurrentMana = FMath::Clamp(NewMana, 0.0f, MaxMana);
+    CurrentMana = FMath::Clamp(NewMana, 0.0f, GetMaxMana());
     ForceNetUpdate();
     BroadcastStateUpdated();
 }
@@ -169,7 +335,7 @@ float AMOBAMMOPlayerState::ApplyDamage(float Amount)
     }
 
     const float PreviousHealth = CurrentHealth;
-    CurrentHealth = FMath::Clamp(CurrentHealth - Amount, 0.0f, MaxHealth);
+    CurrentHealth = FMath::Clamp(CurrentHealth - Amount, 0.0f, GetMaxHealth());
 
     if (!FMath::IsNearlyEqual(CurrentHealth, PreviousHealth))
     {
@@ -188,7 +354,7 @@ float AMOBAMMOPlayerState::ApplyHealing(float Amount)
     }
 
     const float PreviousHealth = CurrentHealth;
-    CurrentHealth = FMath::Clamp(CurrentHealth + Amount, 0.0f, MaxHealth);
+    CurrentHealth = FMath::Clamp(CurrentHealth + Amount, 0.0f, GetMaxHealth());
 
     if (!FMath::IsNearlyEqual(CurrentHealth, PreviousHealth))
     {
@@ -216,7 +382,7 @@ bool AMOBAMMOPlayerState::ConsumeMana(float Amount)
         return false;
     }
 
-    CurrentMana = FMath::Clamp(CurrentMana - Amount, 0.0f, MaxMana);
+    CurrentMana = FMath::Clamp(CurrentMana - Amount, 0.0f, GetMaxMana());
     ForceNetUpdate();
     BroadcastStateUpdated();
     return true;
@@ -230,7 +396,7 @@ float AMOBAMMOPlayerState::RestoreMana(float Amount)
     }
 
     const float PreviousMana = CurrentMana;
-    CurrentMana = FMath::Clamp(CurrentMana + Amount, 0.0f, MaxMana);
+    CurrentMana = FMath::Clamp(CurrentMana + Amount, 0.0f, GetMaxMana());
 
     if (!FMath::IsNearlyEqual(CurrentMana, PreviousMana))
     {
@@ -431,24 +597,62 @@ void AMOBAMMOPlayerState::GrantItem(const FString& ItemId, int32 Quantity, int32
         return;
     }
 
-    // Try to stack if SlotIndex is not strictly required to be empty
-    for (int32 i = 0; i < InventoryArray.Items.Num(); ++i)
+    const int32 MaxStack = GetInventoryMaxStackForItem(ItemId);
+    if (MaxStack <= 0)
     {
-        if (InventoryArray.Items[i].ItemId == ItemId)
+        return;
+    }
+
+    int32 RemainingQuantity = Quantity;
+    bool bChangedInventory = false;
+
+    if (MaxStack > 1)
+    {
+        for (FMOBAMMOInventoryItem& ExistingItem : InventoryArray.Items)
         {
-            // Simple stacking without max capacity check for now
-            InventoryArray.Items[i].Quantity += Quantity;
-            InventoryArray.MarkItemDirty(InventoryArray.Items[i]);
-            ForceNetUpdate();
-            BroadcastStateUpdated();
-            return;
+            if (RemainingQuantity <= 0)
+            {
+                break;
+            }
+
+            if (ExistingItem.ItemId != ItemId || ExistingItem.Quantity >= MaxStack || ExistingItem.SlotIndex >= 0)
+            {
+                continue;
+            }
+
+            const int32 AddQuantity = FMath::Min(MaxStack - ExistingItem.Quantity, RemainingQuantity);
+            ExistingItem.Quantity += AddQuantity;
+            RemainingQuantity -= AddQuantity;
+            InventoryArray.MarkItemDirty(ExistingItem);
+            bChangedInventory = true;
+        }
+
+        while (RemainingQuantity > 0)
+        {
+            const int32 StackQuantity = FMath::Min(MaxStack, RemainingQuantity);
+            InventoryArray.Items.Add(FMOBAMMOInventoryItem(ItemId, StackQuantity, -1));
+            InventoryArray.MarkItemDirty(InventoryArray.Items.Last());
+            RemainingQuantity -= StackQuantity;
+            bChangedInventory = true;
+        }
+    }
+    else
+    {
+        for (int32 i = 0; i < Quantity; ++i)
+        {
+            const int32 NewSlotIndex = (i == 0 && IsKnownEquipmentSlotForItem(ItemId, SlotIndex)) ? SlotIndex : -1;
+            InventoryArray.Items.Add(FMOBAMMOInventoryItem(ItemId, 1, NewSlotIndex));
+            InventoryArray.MarkItemDirty(InventoryArray.Items.Last());
+            bChangedInventory = true;
         }
     }
 
-    // Otherwise add new item
-    FMOBAMMOInventoryItem NewItem(ItemId, Quantity, SlotIndex >= 0 ? SlotIndex : InventoryArray.Items.Num());
-    InventoryArray.Items.Add(NewItem);
-    InventoryArray.MarkItemDirty(InventoryArray.Items.Last());
+    if (!bChangedInventory)
+    {
+        return;
+    }
+
+    RecalculateEquipmentBonusesFromInventory();
     ForceNetUpdate();
     BroadcastStateUpdated();
 }
@@ -474,6 +678,7 @@ void AMOBAMMOPlayerState::RemoveItem(const FString& ItemId, int32 Quantity)
             {
                 InventoryArray.MarkItemDirty(InventoryArray.Items[i]);
             }
+            RecalculateEquipmentBonusesFromInventory();
             ForceNetUpdate();
             BroadcastStateUpdated();
             return;
@@ -481,44 +686,305 @@ void AMOBAMMOPlayerState::RemoveItem(const FString& ItemId, int32 Quantity)
     }
 }
 
+bool AMOBAMMOPlayerState::ConsumeInventoryItem(const FString& ItemId, int32 Quantity)
+{
+    if (!HasAuthority() || Quantity <= 0 || ItemId.IsEmpty())
+    {
+        return false;
+    }
+
+    for (int32 i = 0; i < InventoryArray.Items.Num(); ++i)
+    {
+        FMOBAMMOInventoryItem& Item = InventoryArray.Items[i];
+        if (Item.ItemId != ItemId || Item.Quantity < Quantity)
+        {
+            continue;
+        }
+
+        Item.Quantity -= Quantity;
+        if (Item.Quantity <= 0)
+        {
+            InventoryArray.Items.RemoveAt(i);
+            InventoryArray.MarkArrayDirty();
+        }
+        else
+        {
+            InventoryArray.MarkItemDirty(Item);
+        }
+
+        RecalculateEquipmentBonusesFromInventory();
+        ForceNetUpdate();
+        BroadcastStateUpdated();
+        return true;
+    }
+
+    return false;
+}
+
+bool AMOBAMMOPlayerState::EquipInventoryItem(const FString& ItemId, int32 EquipSlot)
+{
+    if (!HasAuthority() || ItemId.IsEmpty() || !IsKnownEquipmentSlotForItem(ItemId, EquipSlot))
+    {
+        return false;
+    }
+
+    FMOBAMMOInventoryItem* ItemToEquip = nullptr;
+    for (FMOBAMMOInventoryItem& Item : InventoryArray.Items)
+    {
+        if (Item.ItemId == ItemId)
+        {
+            ItemToEquip = &Item;
+        }
+        else if (Item.SlotIndex == EquipSlot)
+        {
+            Item.SlotIndex = -1;
+            InventoryArray.MarkItemDirty(Item);
+        }
+    }
+
+    if (!ItemToEquip)
+    {
+        return false;
+    }
+
+    ItemToEquip->SlotIndex = EquipSlot;
+    InventoryArray.MarkItemDirty(*ItemToEquip);
+    RecalculateEquipmentBonusesFromInventory();
+    ForceNetUpdate();
+    BroadcastStateUpdated();
+    return true;
+}
+
+bool AMOBAMMOPlayerState::UnequipInventoryItem(const FString& ItemId)
+{
+    if (!HasAuthority() || ItemId.IsEmpty())
+    {
+        return false;
+    }
+
+    for (FMOBAMMOInventoryItem& Item : InventoryArray.Items)
+    {
+        if (Item.ItemId == ItemId && Item.SlotIndex >= 0)
+        {
+            Item.SlotIndex = -1;
+            InventoryArray.MarkItemDirty(Item);
+            RecalculateEquipmentBonusesFromInventory();
+            ForceNetUpdate();
+            BroadcastStateUpdated();
+            return true;
+        }
+    }
+
+    return false;
+}
+
+void AMOBAMMOPlayerState::RecalculateEquipmentBonusesFromInventory()
+{
+    float TotalMaxHealthBonus = 0.0f;
+    float TotalMaxManaBonus = 0.0f;
+
+    for (const FMOBAMMOInventoryItem& Item : InventoryArray.Items)
+    {
+        if (!IsKnownEquipmentSlotForItem(Item.ItemId, Item.SlotIndex))
+        {
+            continue;
+        }
+
+        float ItemMaxHealthBonus = 0.0f;
+        float ItemMaxManaBonus = 0.0f;
+        GetEquipmentBonusesForItem(Item.ItemId, ItemMaxHealthBonus, ItemMaxManaBonus);
+        TotalMaxHealthBonus += ItemMaxHealthBonus;
+        TotalMaxManaBonus += ItemMaxManaBonus;
+    }
+
+    EquipmentMaxHealthBonus = TotalMaxHealthBonus;
+    EquipmentMaxManaBonus = TotalMaxManaBonus;
+    CurrentHealth = FMath::Clamp(CurrentHealth, 0.0f, GetMaxHealth());
+    CurrentMana = FMath::Clamp(CurrentMana, 0.0f, GetMaxMana());
+}
+
+// ─────────────────────────────────────────────────────────────
+// Progression / Level-Up
+// ─────────────────────────────────────────────────────────────
+int32 AMOBAMMOPlayerState::GetXPRequiredForLevel(int32 Level) const
+{
+    // Linear curve: XP needed to advance from Level to Level+1 == 100 * Level.
+    // Level 1 → 100, Level 5 → 500, Level 19 → 1900.  Total XP at L20 = 19 000.
+    return FMath::Max(1, Level) * 100;
+}
+
+int32 AMOBAMMOPlayerState::GetTotalXPForLevel(int32 Level) const
+{
+    // Cumulative sum 100*1 + 100*2 + ... + 100*(Level-1) = 50 * Level * (Level-1).
+    const int32 ClampedLevel = FMath::Clamp(Level, 1, MaxCharacterLevel);
+    return 50 * ClampedLevel * (ClampedLevel - 1);
+}
+
+int32 AMOBAMMOPlayerState::GetExperienceToNextLevel() const
+{
+    if (CharacterLevel >= MaxCharacterLevel) return 0;
+    return FMath::Max(0, GetTotalXPForLevel(CharacterLevel + 1) - CharacterExperience);
+}
+
+float AMOBAMMOPlayerState::GetExperienceProgressFraction() const
+{
+    if (CharacterLevel >= MaxCharacterLevel) return 1.0f;
+    const int32 LevelStartXP = GetTotalXPForLevel(CharacterLevel);
+    const int32 LevelEndXP   = GetTotalXPForLevel(CharacterLevel + 1);
+    const int32 Range        = LevelEndXP - LevelStartXP;
+    if (Range <= 0) return 1.0f;
+    return FMath::Clamp(float(CharacterExperience - LevelStartXP) / float(Range), 0.0f, 1.0f);
+}
+
+int32 AMOBAMMOPlayerState::GrantExperience(int32 Amount)
+{
+    if (!HasAuthority() || Amount <= 0)
+    {
+        return 0;
+    }
+
+    if (CharacterLevel >= MaxCharacterLevel)
+    {
+        // Already capped — clamp XP to the total at max level so the bar stays full.
+        CharacterExperience = GetTotalXPForLevel(MaxCharacterLevel);
+        ForceNetUpdate();
+        BroadcastStateUpdated();
+        return 0;
+    }
+
+    CharacterExperience += Amount;
+
+    int32 LevelsGained = 0;
+    while (CharacterLevel < MaxCharacterLevel
+        && CharacterExperience >= GetTotalXPForLevel(CharacterLevel + 1))
+    {
+        CharacterLevel++;
+        LevelsGained++;
+
+        // Scale base attributes per level: +15 HP, +8 MP each level after L1.
+        const float NewBaseMaxHealth = 100.0f + (CharacterLevel - 1) * 15.0f;
+        const float NewBaseMaxMana   =  50.0f + (CharacterLevel - 1) *  8.0f;
+        const float HealthGained = FMath::Max(0.0f, NewBaseMaxHealth - MaxHealth);
+        const float ManaGained   = FMath::Max(0.0f, NewBaseMaxMana   - MaxMana);
+
+        MaxHealth = NewBaseMaxHealth;
+        MaxMana   = NewBaseMaxMana;
+
+        // Reward the level-up: grant the bonus HP/MP gained from the increase
+        // (so a player at low HP doesn't have a half-empty bar after leveling).
+        CurrentHealth = FMath::Min(CurrentHealth + HealthGained, GetMaxHealth());
+        CurrentMana   = FMath::Min(CurrentMana   + ManaGained,   GetMaxMana());
+
+        // Grant 1 skill point per level-up.
+        SkillPoints++;
+    }
+
+    if (CharacterLevel >= MaxCharacterLevel)
+    {
+        // Cap XP so the bar reads "MAX" instead of overshooting.
+        CharacterExperience = GetTotalXPForLevel(MaxCharacterLevel);
+    }
+
+    ForceNetUpdate();
+    BroadcastStateUpdated();
+    return LevelsGained;
+}
+
+// ─────────────────────────────────────────────────────────────
+// Currency / Gold
+// ─────────────────────────────────────────────────────────────
+int32 AMOBAMMOPlayerState::GrantGold(int32 Amount)
+{
+    if (!HasAuthority() || Amount <= 0)
+    {
+        return 0;
+    }
+
+    // Clamp to a sane upper bound to avoid 32-bit overflow griefing.
+    constexpr int32 GoldHardCap = 1'000'000'000;
+    const int32 NewGold = FMath::Min(GoldHardCap, Gold + Amount);
+    const int32 Granted = NewGold - Gold;
+    Gold = NewGold;
+
+    ForceNetUpdate();
+    BroadcastStateUpdated();
+    return Granted;
+}
+
+bool AMOBAMMOPlayerState::SpendGold(int32 Amount)
+{
+    if (!HasAuthority() || Amount <= 0 || Gold < Amount)
+    {
+        return false;
+    }
+
+    Gold -= Amount;
+    ForceNetUpdate();
+    BroadcastStateUpdated();
+    return true;
+}
+
 void AMOBAMMOPlayerState::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const
 {
     Super::GetLifetimeReplicatedProps(OutLifetimeProps);
 
-    DOREPLIFETIME(AMOBAMMOPlayerState, AccountId);
+    // --- Visible to ALL clients (nameplate, health bar, scoreboard, appearance) ---
     DOREPLIFETIME(AMOBAMMOPlayerState, CharacterId);
-    DOREPLIFETIME(AMOBAMMOPlayerState, SessionId);
-    DOREPLIFETIME(AMOBAMMOPlayerState, PersistenceStatus);
-    DOREPLIFETIME(AMOBAMMOPlayerState, PersistenceErrorMessage);
     DOREPLIFETIME(AMOBAMMOPlayerState, CharacterName);
     DOREPLIFETIME(AMOBAMMOPlayerState, ClassId);
     DOREPLIFETIME(AMOBAMMOPlayerState, CharacterLevel);
-    DOREPLIFETIME(AMOBAMMOPlayerState, CharacterExperience);
-    DOREPLIFETIME(AMOBAMMOPlayerState, SavedWorldPosition);
     DOREPLIFETIME(AMOBAMMOPlayerState, PresetId);
     DOREPLIFETIME(AMOBAMMOPlayerState, ColorIndex);
     DOREPLIFETIME(AMOBAMMOPlayerState, Shade);
     DOREPLIFETIME(AMOBAMMOPlayerState, Transparent);
     DOREPLIFETIME(AMOBAMMOPlayerState, TextureDetail);
-    DOREPLIFETIME(AMOBAMMOPlayerState, bHasPersistentCharacterSnapshot);
     DOREPLIFETIME(AMOBAMMOPlayerState, CurrentHealth);
     DOREPLIFETIME(AMOBAMMOPlayerState, MaxHealth);
-    DOREPLIFETIME(AMOBAMMOPlayerState, CurrentMana);
-    DOREPLIFETIME(AMOBAMMOPlayerState, MaxMana);
-    DOREPLIFETIME(AMOBAMMOPlayerState, DamageCooldownEndServerTime);
-    DOREPLIFETIME(AMOBAMMOPlayerState, HealCooldownEndServerTime);
-    DOREPLIFETIME(AMOBAMMOPlayerState, DrainCooldownEndServerTime);
-    DOREPLIFETIME(AMOBAMMOPlayerState, ManaSurgeCooldownEndServerTime);
-    DOREPLIFETIME(AMOBAMMOPlayerState, ArcChargeEndServerTime);
     DOREPLIFETIME(AMOBAMMOPlayerState, KillCount);
     DOREPLIFETIME(AMOBAMMOPlayerState, DeathCount);
-    DOREPLIFETIME(AMOBAMMOPlayerState, RespawnAvailableServerTime);
-    DOREPLIFETIME(AMOBAMMOPlayerState, SelectedTargetCharacterId);
-    DOREPLIFETIME(AMOBAMMOPlayerState, SelectedTargetName);
-    DOREPLIFETIME(AMOBAMMOPlayerState, IncomingCombatFeedbackText);
-    DOREPLIFETIME(AMOBAMMOPlayerState, IncomingCombatFeedbackEndServerTime);
-    DOREPLIFETIME(AMOBAMMOPlayerState, bIncomingCombatFeedbackHealing);
-    DOREPLIFETIME(AMOBAMMOPlayerState, InventoryArray);
+
+    // --- Owner-only: private session/persistence data ---
+    DOREPLIFETIME_CONDITION(AMOBAMMOPlayerState, AccountId,                       COND_OwnerOnly);
+    DOREPLIFETIME_CONDITION(AMOBAMMOPlayerState, SessionId,                       COND_OwnerOnly);
+    DOREPLIFETIME_CONDITION(AMOBAMMOPlayerState, PersistenceStatus,               COND_OwnerOnly);
+    DOREPLIFETIME_CONDITION(AMOBAMMOPlayerState, PersistenceErrorMessage,         COND_OwnerOnly);
+    DOREPLIFETIME_CONDITION(AMOBAMMOPlayerState, SavedWorldPosition,              COND_OwnerOnly);
+    DOREPLIFETIME_CONDITION(AMOBAMMOPlayerState, bHasPersistentCharacterSnapshot, COND_OwnerOnly);
+
+    // --- Owner-only: stats only the local player needs ---
+    DOREPLIFETIME_CONDITION(AMOBAMMOPlayerState, CharacterExperience,             COND_OwnerOnly);
+    DOREPLIFETIME_CONDITION(AMOBAMMOPlayerState, CurrentMana,                     COND_OwnerOnly);
+    DOREPLIFETIME_CONDITION(AMOBAMMOPlayerState, MaxMana,                         COND_OwnerOnly);
+    DOREPLIFETIME_CONDITION(AMOBAMMOPlayerState, EquipmentMaxHealthBonus,         COND_OwnerOnly);
+    DOREPLIFETIME_CONDITION(AMOBAMMOPlayerState, EquipmentMaxManaBonus,           COND_OwnerOnly);
+
+    // --- Owner-only: ability cooldown timers (only owner's HUD displays these) ---
+    DOREPLIFETIME_CONDITION(AMOBAMMOPlayerState, DamageCooldownEndServerTime,     COND_OwnerOnly);
+    DOREPLIFETIME_CONDITION(AMOBAMMOPlayerState, HealCooldownEndServerTime,       COND_OwnerOnly);
+    DOREPLIFETIME_CONDITION(AMOBAMMOPlayerState, DrainCooldownEndServerTime,      COND_OwnerOnly);
+    DOREPLIFETIME_CONDITION(AMOBAMMOPlayerState, ManaSurgeCooldownEndServerTime,  COND_OwnerOnly);
+    DOREPLIFETIME_CONDITION(AMOBAMMOPlayerState, ArcChargeEndServerTime,          COND_OwnerOnly);
+    DOREPLIFETIME_CONDITION(AMOBAMMOPlayerState, RespawnAvailableServerTime,      COND_OwnerOnly);
+
+    // --- Owner-only: targeting & combat feedback (only owner's HUD uses these) ---
+    DOREPLIFETIME_CONDITION(AMOBAMMOPlayerState, SelectedTargetCharacterId,           COND_OwnerOnly);
+    DOREPLIFETIME_CONDITION(AMOBAMMOPlayerState, SelectedTargetName,                  COND_OwnerOnly);
+    DOREPLIFETIME_CONDITION(AMOBAMMOPlayerState, IncomingCombatFeedbackText,          COND_OwnerOnly);
+    DOREPLIFETIME_CONDITION(AMOBAMMOPlayerState, IncomingCombatFeedbackEndServerTime, COND_OwnerOnly);
+    DOREPLIFETIME_CONDITION(AMOBAMMOPlayerState, bIncomingCombatFeedbackHealing,      COND_OwnerOnly);
+
+    // --- Owner-only: inventory (never send other players' bags to everyone) ---
+    DOREPLIFETIME_CONDITION(AMOBAMMOPlayerState, InventoryArray,                  COND_OwnerOnly);
+
+    // --- Owner-only: gold (private currency, never replicated to others) ---
+    DOREPLIFETIME_CONDITION(AMOBAMMOPlayerState, Gold,                            COND_OwnerOnly);
+
+    // --- Owner-only: quest progress (only the owning player tracks their quests) ---
+    DOREPLIFETIME_CONDITION(AMOBAMMOPlayerState, QuestProgress,                   COND_OwnerOnly);
+
+    // --- Owner-only: skill points and ability ranks ---
+    DOREPLIFETIME_CONDITION(AMOBAMMOPlayerState, SkillPoints,                     COND_OwnerOnly);
+    DOREPLIFETIME_CONDITION(AMOBAMMOPlayerState, AbilityRanks,                    COND_OwnerOnly);
 }
 
 void AMOBAMMOPlayerState::OnRep_PlayerIdentity()
@@ -549,6 +1015,129 @@ void AMOBAMMOPlayerState::OnRep_CombatFeedback()
 void AMOBAMMOPlayerState::OnRep_InventoryArray()
 {
     BroadcastStateUpdated();
+}
+
+void AMOBAMMOPlayerState::OnRep_QuestProgress()
+{
+    BroadcastStateUpdated();
+}
+
+// ─────────────────────────────────────────────────────────────
+// Quest / Objective System
+// ─────────────────────────────────────────────────────────────
+
+void AMOBAMMOPlayerState::AssignStartingQuests()
+{
+    if (!HasAuthority())
+    {
+        return;
+    }
+
+    QuestProgress.Reset();
+    for (const FString& QuestId : UMOBAMMOQuestCatalog::GetDefaultSessionQuestIds())
+    {
+        FMOBAMMOQuestProgress Entry;
+        Entry.QuestId      = QuestId;
+        Entry.CurrentCount = 0;
+        Entry.bCompleted   = false;
+        QuestProgress.Add(MoveTemp(Entry));
+    }
+
+    ForceNetUpdate();
+    BroadcastStateUpdated();
+}
+
+TArray<FString> AMOBAMMOPlayerState::AdvanceQuestProgress(EMOBAMMOQuestType Type, int32 Amount)
+{
+    TArray<FString> NewlyCompleted;
+    if (!HasAuthority() || Amount <= 0)
+    {
+        return NewlyCompleted;
+    }
+
+    bool bAnyChanged = false;
+
+    for (FMOBAMMOQuestProgress& Entry : QuestProgress)
+    {
+        if (Entry.bCompleted)
+        {
+            continue;
+        }
+
+        // Look up the definition to check type and target.
+        FMOBAMMOQuestDefinition Def;
+        if (!UMOBAMMOQuestCatalog::FindQuest(Entry.QuestId, Def))
+        {
+            continue;
+        }
+
+        if (Def.Type != Type)
+        {
+            continue;
+        }
+
+        Entry.CurrentCount = FMath::Min(Entry.CurrentCount + Amount, Def.TargetCount);
+        bAnyChanged = true;
+
+        if (Entry.CurrentCount >= Def.TargetCount)
+        {
+            Entry.bCompleted = true;
+            NewlyCompleted.Add(Entry.QuestId);
+        }
+    }
+
+    if (bAnyChanged)
+    {
+        ForceNetUpdate();
+        BroadcastStateUpdated();
+    }
+
+    return NewlyCompleted;
+}
+
+void AMOBAMMOPlayerState::OnRep_SkillProgress()
+{
+    BroadcastStateUpdated();
+}
+
+// ─────────────────────────────────────────────────────────────
+// Skill Points / Ability Ranks
+// ─────────────────────────────────────────────────────────────
+
+int32 AMOBAMMOPlayerState::GetAbilityRank(int32 SlotIndex) const
+{
+    if (!AbilityRanks.IsValidIndex(SlotIndex))
+    {
+        return 1;
+    }
+    return AbilityRanks[SlotIndex];
+}
+
+bool AMOBAMMOPlayerState::CanUpgradeAbility(int32 SlotIndex) const
+{
+    return SkillPoints > 0
+        && AbilityRanks.IsValidIndex(SlotIndex)
+        && AbilityRanks[SlotIndex] < MaxAbilityRank;
+}
+
+bool AMOBAMMOPlayerState::SpendSkillPoint(int32 AbilitySlotIndex)
+{
+    if (!HasAuthority())
+    {
+        return false;
+    }
+
+    if (!CanUpgradeAbility(AbilitySlotIndex))
+    {
+        return false;
+    }
+
+    AbilityRanks[AbilitySlotIndex]++;
+    SkillPoints--;
+
+    ForceNetUpdate();
+    BroadcastStateUpdated();
+    return true;
 }
 
 void AMOBAMMOPlayerState::BroadcastStateUpdated()

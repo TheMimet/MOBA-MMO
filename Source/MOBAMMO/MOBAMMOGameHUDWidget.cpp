@@ -20,9 +20,13 @@
 #include "MOBAMMOGameState.h"
 #include "MOBAMMOPlayerController.h"
 #include "MOBAMMOPlayerState.h"
+#include "Components/EditableTextBox.h"
 #include "MOBAMMOTrainingMinionActor.h"
 #include "MOBAMMOInventoryWidget.h"
+#include "MOBAMMOCharacter.h"
+#include "Components/BorderSlot.h"
 #include "EngineUtils.h"
+#include "MOBAMMOQuestCatalog.h"
 
 // ─────────────────────────────────────────────────────────────
 // Color palette
@@ -39,6 +43,8 @@ namespace HUDColors
     static const FLinearColor HealthBg       (0.140f, 0.060f, 0.060f, 1.0f);
     static const FLinearColor ManaFill       (0.160f, 0.440f, 0.820f, 1.0f);
     static const FLinearColor ManaBg         (0.040f, 0.060f, 0.140f, 1.0f);
+    static const FLinearColor XPFill         (0.760f, 0.420f, 0.940f, 1.0f);
+    static const FLinearColor XPBg           (0.090f, 0.040f, 0.140f, 1.0f);
 
     // Abilities
     static const FLinearColor AbilityReady   (0.220f, 0.580f, 0.920f, 1.0f);
@@ -90,11 +96,14 @@ void UMOBAMMOGameHUDWidget::NativeTick(const FGeometry& MyGeometry, float InDelt
     Super::NativeTick(MyGeometry, InDeltaTime);
 
     CombatEventHighlightRemaining = FMath::Max(0.0f, CombatEventHighlightRemaining - InDeltaTime);
+    LevelUpFlashRemaining          = FMath::Max(0.0f, LevelUpFlashRemaining - InDeltaTime);
 
     if (IsVisible())
     {
         EnsureAbilityBarVisible();
         UpdateTexts();
+        UpdateMinimap();
+        UpdateQuestPanel();
     }
 }
 
@@ -115,12 +124,36 @@ bool UMOBAMMOGameHUDWidget::ShouldBeVisible() const
     }
 
     const UMOBAMMOBackendSubsystem* BackendSubsystem = GetBackendSubsystem();
-    if (!BackendSubsystem)
+    if (BackendSubsystem)
     {
-        return NetMode == NM_Standalone;
+        const FString SessionStatus = BackendSubsystem->GetSessionStatus();
+        if (SessionStatus != TEXT("Ready")
+            && SessionStatus != TEXT("Active")
+            && SessionStatus != TEXT("Reconnecting")
+            && SessionStatus != TEXT("ReconnectRequired"))
+        {
+            return false;
+        }
     }
 
-    return BackendSubsystem->GetSessionStatus() != TEXT("Starting") && BackendSubsystem->GetSessionStatus() != TEXT("Traveling");
+    const APlayerController* PlayerController = GetOwningPlayer();
+    const AMOBAMMOPlayerState* PlayerState = PlayerController ? PlayerController->GetPlayerState<AMOBAMMOPlayerState>() : nullptr;
+    if (PlayerController
+        && PlayerController->GetPawn()
+        && PlayerState
+        && !PlayerState->GetSessionId().TrimStartAndEnd().IsEmpty()
+        && !PlayerState->GetCharacterId().TrimStartAndEnd().IsEmpty())
+    {
+        return true;
+    }
+
+    if (!BackendSubsystem)
+    {
+        return false;
+    }
+
+    const FString SessionStatus = BackendSubsystem->GetSessionStatus();
+    return SessionStatus == TEXT("Ready") || SessionStatus == TEXT("Active") || SessionStatus == TEXT("Reconnecting") || SessionStatus == TEXT("ReconnectRequired");
 }
 
 bool UMOBAMMOGameHUDWidget::IsAbilityBarReady() const
@@ -193,8 +226,11 @@ void UMOBAMMOGameHUDWidget::BuildLayout()
     BuildAbilityBar(RootCanvas);
     BuildTargetFrame(RootCanvas);
     BuildCombatLog(RootCanvas);
+    BuildChatPanel(RootCanvas);
     BuildScoreBar(RootCanvas);
     BuildCenterNotifications(RootCanvas);
+    BuildMinimap(RootCanvas);
+    BuildQuestPanel(RootCanvas);
 
     InventoryWidget = WidgetTree->ConstructWidget<UMOBAMMOInventoryWidget>(UMOBAMMOInventoryWidget::StaticClass());
     if (InventoryWidget)
@@ -221,6 +257,11 @@ void UMOBAMMOGameHUDWidget::ToggleInventory()
 // ─────────────────────────────────────────────────────────────
 // Layout: Player Frame (bottom-left)
 // ─────────────────────────────────────────────────────────────
+bool UMOBAMMOGameHUDWidget::IsInventoryOpen() const
+{
+    return InventoryWidget && InventoryWidget->IsInventoryVisible();
+}
+
 void UMOBAMMOGameHUDWidget::BuildPlayerFrame(UCanvasPanel* Canvas)
 {
     UBorder* FrameBg = MakeGlassPanel(HUDColors::PanelBg, 0.82f);
@@ -232,7 +273,7 @@ void UMOBAMMOGameHUDWidget::BuildPlayerFrame(UCanvasPanel* Canvas)
         FrameSlot->SetAnchors(FAnchors(0.0f, 1.0f, 0.0f, 1.0f));      // bottom-left
         FrameSlot->SetAlignment(FVector2D(0.0f, 1.0f));
         FrameSlot->SetPosition(FVector2D(20.0f, -20.0f));
-        FrameSlot->SetSize(FVector2D(320.0f, 140.0f));
+        FrameSlot->SetSize(FVector2D(320.0f, 170.0f));
         FrameSlot->SetAutoSize(false);
     }
 
@@ -245,7 +286,7 @@ void UMOBAMMOGameHUDWidget::BuildPlayerFrame(UCanvasPanel* Canvas)
     // Actually replace child with the glow wrapper
     if (FrameSlot)
     {
-        FrameSlot->SetSize(FVector2D(322.0f, 142.0f));
+        FrameSlot->SetSize(FVector2D(322.0f, 172.0f));
     }
     Canvas->RemoveChild(FrameBg);
     UCanvasPanelSlot* GlowSlot = Canvas->AddChildToCanvas(BorderGlow);
@@ -254,7 +295,7 @@ void UMOBAMMOGameHUDWidget::BuildPlayerFrame(UCanvasPanel* Canvas)
         GlowSlot->SetAnchors(FAnchors(0.0f, 1.0f, 0.0f, 1.0f));
         GlowSlot->SetAlignment(FVector2D(0.0f, 1.0f));
         GlowSlot->SetPosition(FVector2D(20.0f, -20.0f));
-        GlowSlot->SetSize(FVector2D(322.0f, 142.0f));
+        GlowSlot->SetSize(FVector2D(322.0f, 172.0f));
         GlowSlot->SetAutoSize(false);
     }
 
@@ -289,15 +330,36 @@ void UMOBAMMOGameHUDWidget::BuildPlayerFrame(UCanvasPanel* Canvas)
         LifeSlot->SetPadding(FMargin(6.0f, 0.0f, 0.0f, 0.0f));
     }
 
-    // Row 2: Class + Level
+    // Row 2: Class + Level (left) · Gold (right)
+    UHorizontalBox* ClassRow = WidgetTree->ConstructWidget<UHorizontalBox>(UHorizontalBox::StaticClass());
+    if (UVerticalBoxSlot* ClassRowSlot = Content->AddChildToVerticalBox(ClassRow))
+    {
+        ClassRowSlot->SetPadding(FMargin(0.0f, 2.0f, 0.0f, 8.0f));
+    }
+
     PlayerClassLevelText = WidgetTree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass());
     PlayerClassLevelText->SetColorAndOpacity(FSlateColor(HUDColors::TextSecondary));
     FSlateFontInfo ClassFont = PlayerClassLevelText->GetFont();
     ClassFont.Size = 11;
     PlayerClassLevelText->SetFont(ClassFont);
-    if (UVerticalBoxSlot* ClassSlot = Content->AddChildToVerticalBox(PlayerClassLevelText))
+    if (UHorizontalBoxSlot* ClassTextSlot = ClassRow->AddChildToHorizontalBox(PlayerClassLevelText))
     {
-        ClassSlot->SetPadding(FMargin(0.0f, 2.0f, 0.0f, 8.0f));
+        ClassTextSlot->SetSize(ESlateSizeRule::Fill);
+        ClassTextSlot->SetVerticalAlignment(VAlign_Center);
+    }
+
+    GoldText = WidgetTree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass());
+    GoldText->SetColorAndOpacity(FSlateColor(HUDColors::TextGold));
+    FSlateFontInfo GoldFont = GoldText->GetFont();
+    GoldFont.Size = 12;
+    GoldFont.TypefaceFontName = TEXT("Bold");
+    GoldText->SetFont(GoldFont);
+    GoldText->SetText(FText::FromString(TEXT("0 g")));
+    if (UHorizontalBoxSlot* GoldSlot = ClassRow->AddChildToHorizontalBox(GoldText))
+    {
+        GoldSlot->SetVerticalAlignment(VAlign_Center);
+        GoldSlot->SetHorizontalAlignment(HAlign_Right);
+        GoldSlot->SetPadding(FMargin(6.0f, 0.0f, 0.0f, 0.0f));
     }
 
     // Health bar with value overlay
@@ -352,6 +414,35 @@ void UMOBAMMOGameHUDWidget::BuildPlayerFrame(UCanvasPanel* Canvas)
 
         Content->AddChildToVerticalBox(ManaSizeBox);
     }
+
+    // XP bar with overlaid level / progress text
+    {
+        UOverlay* XPOverlay = WidgetTree->ConstructWidget<UOverlay>(UOverlay::StaticClass());
+        USizeBox* XPSizeBox = WidgetTree->ConstructWidget<USizeBox>(USizeBox::StaticClass());
+        XPSizeBox->SetHeightOverride(14.0f);
+        XPSizeBox->AddChild(XPOverlay);
+
+        XPBar = MakeStyledBar(HUDColors::XPFill, HUDColors::XPBg, 14.0f);
+        XPBar->SetPercent(0.0f);
+        XPOverlay->AddChildToOverlay(XPBar);
+
+        XPValueText = WidgetTree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass());
+        XPValueText->SetColorAndOpacity(FSlateColor(FLinearColor::White));
+        FSlateFontInfo XPFont = XPValueText->GetFont();
+        XPFont.Size = 9;
+        XPFont.TypefaceFontName = TEXT("Bold");
+        XPValueText->SetFont(XPFont);
+        if (UOverlaySlot* XPValueSlot = XPOverlay->AddChildToOverlay(XPValueText))
+        {
+            XPValueSlot->SetHorizontalAlignment(HAlign_Center);
+            XPValueSlot->SetVerticalAlignment(VAlign_Center);
+        }
+
+        if (UVerticalBoxSlot* XPSlotV = Content->AddChildToVerticalBox(XPSizeBox))
+        {
+            XPSlotV->SetPadding(FMargin(0.0f, 4.0f, 0.0f, 0.0f));
+        }
+    }
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -359,13 +450,7 @@ void UMOBAMMOGameHUDWidget::BuildPlayerFrame(UCanvasPanel* Canvas)
 // ─────────────────────────────────────────────────────────────
 void UMOBAMMOGameHUDWidget::BuildAbilityBar(UCanvasPanel* Canvas)
 {
-    const TArray<FMOBAMMOAbilityDefinition> Abilities = {
-        MOBAMMOAbilitySet::ArcBurst(),
-        MOBAMMOAbilitySet::Renew(),
-        MOBAMMOAbilitySet::DrainPulse(),
-        MOBAMMOAbilitySet::ManaSurge(),
-        MOBAMMOAbilitySet::Reforge()
-    };
+    const TArray<FMOBAMMOAbilityDefinition> Abilities = MOBAMMOAbilitySet::ForClass(TEXT(""));
 
     AbilityBarBorder = MakeGlassPanel(HUDColors::PanelBg, 0.88f);
     AbilityBarBorder->SetPadding(FMargin(10.0f, 8.0f));
@@ -632,6 +717,138 @@ void UMOBAMMOGameHUDWidget::BuildCombatLog(UCanvasPanel* Canvas)
 }
 
 // ─────────────────────────────────────────────────────────────
+// Layout: Chat Panel (bottom-left, above player frame)
+// ─────────────────────────────────────────────────────────────
+void UMOBAMMOGameHUDWidget::BuildChatPanel(UCanvasPanel* Canvas)
+{
+    // Outer glass panel
+    UBorder* ChatBg = MakeGlassPanel(HUDColors::PanelBg, 0.60f);
+    ChatBg->SetPadding(FMargin(10.0f, 6.0f));
+
+    UCanvasPanelSlot* ChatSlot = Canvas->AddChildToCanvas(ChatBg);
+    if (ChatSlot)
+    {
+        // Sits just above the player frame (player frame: 142h + 20 margin = 162px from bottom)
+        ChatSlot->SetAnchors(FAnchors(0.0f, 1.0f, 0.0f, 1.0f));
+        ChatSlot->SetAlignment(FVector2D(0.0f, 1.0f));
+        ChatSlot->SetPosition(FVector2D(20.0f, -172.0f));
+        ChatSlot->SetSize(FVector2D(340.0f, 126.0f));
+        ChatSlot->SetAutoSize(false);
+    }
+
+    UVerticalBox* ChatVBox = WidgetTree->ConstructWidget<UVerticalBox>(UVerticalBox::StaticClass());
+    ChatBg->SetContent(ChatVBox);
+
+    // ── Header ──
+    UTextBlock* ChatHeader = WidgetTree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass());
+    ChatHeader->SetColorAndOpacity(FSlateColor(HUDColors::TextSecondary));
+    FSlateFontInfo HeaderFont = ChatHeader->GetFont();
+    HeaderFont.Size = 9;
+    ChatHeader->SetFont(HeaderFont);
+    ChatHeader->SetText(FText::FromString(TEXT("--- Zone Chat  [Enter] to type ---")));
+    if (UVerticalBoxSlot* HSlot = ChatVBox->AddChildToVerticalBox(ChatHeader))
+    {
+        HSlot->SetPadding(FMargin(0.0f, 0.0f, 0.0f, 4.0f));
+    }
+
+    // ── Chat history ──
+    ChatHistoryText = WidgetTree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass());
+    ChatHistoryText->SetColorAndOpacity(FSlateColor(HUDColors::TextCyan));
+    FSlateFontInfo ChatFont = ChatHistoryText->GetFont();
+    ChatFont.Size = 10;
+    ChatHistoryText->SetFont(ChatFont);
+    ChatHistoryText->SetAutoWrapText(true);
+    ChatHistoryText->SetText(FText::GetEmpty());
+    if (UVerticalBoxSlot* HistSlot = ChatVBox->AddChildToVerticalBox(ChatHistoryText))
+    {
+        HistSlot->SetSize(ESlateSizeRule::Fill);
+    }
+
+    // ── Input row (hidden until Enter pressed) ──
+    ChatInputBorder = MakeGlassPanel(HUDColors::PanelHighlight, 0.90f);
+    ChatInputBorder->SetPadding(FMargin(6.0f, 3.0f));
+    ChatInputBorder->SetVisibility(ESlateVisibility::Collapsed);
+    ChatVBox->AddChildToVerticalBox(ChatInputBorder);
+
+    ChatInputBox = WidgetTree->ConstructWidget<UEditableTextBox>(UEditableTextBox::StaticClass());
+    ChatInputBox->SetHintText(FText::FromString(TEXT("Type message... [Enter] send  [Esc] cancel")));
+    // Style the hint and text color
+    FEditableTextBoxStyle BoxStyle = ChatInputBox->GetWidgetStyle();
+    BoxStyle.ForegroundColor = FSlateColor(HUDColors::TextPrimary);
+    ChatInputBox->SetWidgetStyle(BoxStyle);
+    ChatInputBox->OnTextCommitted.AddDynamic(this, &UMOBAMMOGameHUDWidget::HandleChatTextCommitted);
+    ChatInputBorder->SetContent(ChatInputBox);
+}
+
+void UMOBAMMOGameHUDWidget::OpenChat()
+{
+    if (bChatOpen || !ChatInputBorder || !ChatInputBox)
+    {
+        return;
+    }
+
+    bChatOpen = true;
+    ChatInputBox->SetText(FText::GetEmpty());
+    ChatInputBorder->SetVisibility(ESlateVisibility::Visible);
+
+    // Switch to UI-only input so keyboard goes to the text box
+    if (APlayerController* PC = GetOwningPlayer())
+    {
+        FInputModeGameAndUI InputMode;
+        InputMode.SetWidgetToFocus(ChatInputBox->TakeWidget());
+        InputMode.SetHideCursorDuringCapture(false);
+        InputMode.SetLockMouseToViewportBehavior(EMouseLockMode::DoNotLock);
+        PC->SetInputMode(InputMode);
+        PC->SetShowMouseCursor(true);
+    }
+}
+
+void UMOBAMMOGameHUDWidget::CloseChat()
+{
+    if (!bChatOpen)
+    {
+        return;
+    }
+
+    bChatOpen = false;
+
+    if (ChatInputBorder)
+    {
+        ChatInputBorder->SetVisibility(ESlateVisibility::Collapsed);
+    }
+    if (ChatInputBox)
+    {
+        ChatInputBox->SetText(FText::GetEmpty());
+    }
+
+    // Restore game + UI input mode
+    if (APlayerController* PC = GetOwningPlayer())
+    {
+        FInputModeGameAndUI InputMode;
+        InputMode.SetHideCursorDuringCapture(false);
+        PC->SetInputMode(InputMode);
+        PC->SetShowMouseCursor(true);
+    }
+}
+
+void UMOBAMMOGameHUDWidget::HandleChatTextCommitted(const FText& Text, ETextCommit::Type CommitType)
+{
+    if (CommitType == ETextCommit::OnEnter)
+    {
+        const FString Message = Text.ToString().TrimStartAndEnd().Left(200);
+        if (!Message.IsEmpty())
+        {
+            if (AMOBAMMOPlayerController* PC = Cast<AMOBAMMOPlayerController>(GetOwningPlayer()))
+            {
+                PC->ServerSendChatMessage(Message);
+            }
+        }
+    }
+    // Close on Enter or Escape
+    CloseChat();
+}
+
+// ─────────────────────────────────────────────────────────────
 // Layout: Score Bar (top-center)
 // ─────────────────────────────────────────────────────────────
 void UMOBAMMOGameHUDWidget::BuildScoreBar(UCanvasPanel* Canvas)
@@ -715,6 +932,26 @@ void UMOBAMMOGameHUDWidget::BuildScoreBar(UCanvasPanel* Canvas)
     {
         SaveSlot->SetVerticalAlignment(VAlign_Center);
     }
+
+    // Skill point indicator (hidden until SP > 0)
+    UTextBlock* SpSep = WidgetTree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass());
+    SpSep->SetText(FText::FromString(TEXT("  |  ")));
+    FSlateFontInfo SpSepF = SpSep->GetFont(); SpSepF.Size = 10; SpSep->SetFont(SpSepF);
+    SpSep->SetColorAndOpacity(FSlateColor(HUDColors::TextSecondary));
+    ScoreRow->AddChildToHorizontalBox(SpSep);
+
+    SkillPointText = WidgetTree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass());
+    SkillPointText->SetText(FText::FromString(TEXT("")));
+    FSlateFontInfo SpF = SkillPointText->GetFont();
+    SpF.Size = 11;
+    SpF.TypefaceFontName = TEXT("Bold");
+    SkillPointText->SetFont(SpF);
+    SkillPointText->SetColorAndOpacity(FSlateColor(FLinearColor(0.95f, 0.75f, 0.10f, 1.0f)));
+    SkillPointText->SetToolTipText(FText::FromString(TEXT("Skill points available — press F1-F4 to upgrade abilities")));
+    if (UHorizontalBoxSlot* SpSlot = ScoreRow->AddChildToHorizontalBox(SkillPointText))
+    {
+        SpSlot->SetVerticalAlignment(VAlign_Center);
+    }
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -735,6 +972,23 @@ void UMOBAMMOGameHUDWidget::BuildCenterNotifications(UCanvasPanel* Canvas)
         EventSlot->SetAnchors(FAnchors(0.5f, 0.15f, 0.5f, 0.15f));
         EventSlot->SetAlignment(FVector2D(0.5f, 0.5f));
         EventSlot->SetAutoSize(true);
+    }
+
+    // LEVEL UP! flash (slightly above combat event so they don't overlap)
+    LevelUpFlashText = WidgetTree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass());
+    LevelUpFlashText->SetColorAndOpacity(FSlateColor(FLinearColor(1.0f, 0.84f, 0.40f, 0.0f)));
+    FSlateFontInfo LvlFont = LevelUpFlashText->GetFont();
+    LvlFont.Size = 32;
+    LvlFont.TypefaceFontName = TEXT("Black");
+    LevelUpFlashText->SetFont(LvlFont);
+    LevelUpFlashText->SetJustification(ETextJustify::Center);
+    LevelUpFlashText->SetShadowColorAndOpacity(FLinearColor(0.0f, 0.0f, 0.0f, 0.85f));
+    LevelUpFlashText->SetShadowOffset(FVector2D(2.0f, 2.0f));
+    if (UCanvasPanelSlot* LvlSlot = Canvas->AddChildToCanvas(LevelUpFlashText))
+    {
+        LvlSlot->SetAnchors(FAnchors(0.5f, 0.32f, 0.5f, 0.32f));
+        LvlSlot->SetAlignment(FVector2D(0.5f, 0.5f));
+        LvlSlot->SetAutoSize(true);
     }
 
     // Action hint (bottom-center, above ability bar)
@@ -845,6 +1099,257 @@ void UMOBAMMOGameHUDWidget::BindToReplicatedState()
 }
 
 // ─────────────────────────────────────────────────────────────
+// Layout: Minimap
+// ─────────────────────────────────────────────────────────────
+
+// Minimap layout constants (all in canvas space with anchor top-right / align top-right)
+namespace MMap
+{
+    // Background panel
+    static constexpr float BgRight  = 20.0f;   // px from right edge (anchor offset X, negative means left of right)
+    static constexpr float BgTop    = 150.0f;  // px below top edge
+    static constexpr float BgW      = 200.0f;
+    static constexpr float BgH      = 162.0f;
+
+    // Map area inside background (6px padding L/R, 22px title, 8px bottom)
+    static constexpr float PadL     = 6.0f;
+    static constexpr float TitleH   = 22.0f;
+    static constexpr float PadBot   = 8.0f;
+    static constexpr float MapW     = BgW - PadL * 2.0f;        // 188
+    static constexpr float MapH     = BgH - TitleH - PadBot;    // 132
+
+    // Canvas offsets for the map top-left corner (relative to top-right anchor)
+    // Bg right edge is at -BgRight from right. Bg left edge is at -(BgRight + BgW) from right.
+    // Map left edge = -(BgRight + BgW - PadL) = -(20+200-6) = -214
+    static constexpr float MapLeft  = -(BgRight + BgW - PadL);  // -214
+    static constexpr float MapTopY  = BgTop + TitleH;            // 172
+
+    // Dot size
+    static constexpr float DotSize  = 8.0f;
+    static constexpr float DotR     = DotSize * 0.5f;
+
+    // Arena world bounds (match GameMode defaults)
+    static constexpr float WMinX = -3500.0f;
+    static constexpr float WMaxX =  3500.0f;
+    static constexpr float WMinY = -2500.0f;
+    static constexpr float WMaxY =  2500.0f;
+}
+
+// Helper: create a coloured dot border on the RootCanvas (top-right anchor)
+static UBorder* MakeMinimapDot(UWidgetTree* Tree, UCanvasPanel* Canvas,
+                                const FLinearColor& Color, float Size)
+{
+    UBorder* Dot = Tree->ConstructWidget<UBorder>(UBorder::StaticClass());
+    Dot->SetBrushColor(Color);
+    Dot->SetPadding(FMargin(0.0f));
+    if (UCanvasPanelSlot* Slot = Canvas->AddChildToCanvas(Dot))
+    {
+        Slot->SetAnchors(FAnchors(1.0f, 0.0f, 1.0f, 0.0f));
+        Slot->SetAlignment(FVector2D(0.0f, 0.0f));
+        Slot->SetSize(FVector2D(Size, Size));
+        Slot->SetAutoSize(false);
+        Slot->SetPosition(FVector2D(0.0f, 0.0f)); // will be updated in UpdateMinimap
+    }
+    return Dot;
+}
+
+void UMOBAMMOGameHUDWidget::BuildMinimap(UCanvasPanel* Canvas)
+{
+    // ── Background panel ──────────────────────────────────────
+    MinimapBg = MakeGlassPanel(FLinearColor(0.012f, 0.015f, 0.030f), 0.88f);
+    MinimapBg->SetPadding(FMargin(0.0f));
+    if (UCanvasPanelSlot* CanvasSlot = Canvas->AddChildToCanvas(MinimapBg))
+    {
+        CanvasSlot->SetAnchors(FAnchors(1.0f, 0.0f, 1.0f, 0.0f));
+        CanvasSlot->SetAlignment(FVector2D(1.0f, 0.0f));
+        CanvasSlot->SetPosition(FVector2D(-MMap::BgRight, MMap::BgTop));
+        CanvasSlot->SetSize(FVector2D(MMap::BgW, MMap::BgH));
+        CanvasSlot->SetAutoSize(false);
+    }
+
+    // Inner layout: title bar
+    {
+        UVerticalBox* VBox = WidgetTree->ConstructWidget<UVerticalBox>(UVerticalBox::StaticClass());
+        Cast<UBorderSlot>(MinimapBg->AddChild(VBox))->SetPadding(FMargin(0.0f));
+
+        // Title bar row
+        UBorder* TitleBar = WidgetTree->ConstructWidget<UBorder>(UBorder::StaticClass());
+        TitleBar->SetBrushColor(FLinearColor(0.025f, 0.032f, 0.065f, 1.0f));
+        TitleBar->SetPadding(FMargin(6.0f, 3.0f));
+        if (UVerticalBoxSlot* VS = VBox->AddChildToVerticalBox(TitleBar))
+        {
+            VS->SetSize(FSlateChildSize(ESlateSizeRule::Automatic));
+        }
+
+        UHorizontalBox* TitleRow = WidgetTree->ConstructWidget<UHorizontalBox>(UHorizontalBox::StaticClass());
+        TitleBar->AddChild(TitleRow);
+
+        // "MAP" label
+        UTextBlock* TitleLbl = WidgetTree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass());
+        TitleLbl->SetText(FText::FromString(TEXT("MAP")));
+        FSlateFontInfo F = TitleLbl->GetFont();
+        F.Size = 9;
+        F.TypefaceFontName = TEXT("Bold");
+        TitleLbl->SetFont(F);
+        TitleLbl->SetColorAndOpacity(FSlateColor(FLinearColor(0.5f, 0.65f, 0.9f, 1.0f)));
+        if (UHorizontalBoxSlot* HS = TitleRow->AddChildToHorizontalBox(TitleLbl))
+        {
+            HS->SetSize(ESlateSizeRule::Fill);
+            HS->SetVerticalAlignment(VAlign_Center);
+        }
+
+        // Legend: green=you, yellow=others
+        UTextBlock* LegendTxt = WidgetTree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass());
+        LegendTxt->SetText(FText::FromString(TEXT("● You  ● Players")));
+        FSlateFontInfo LF = LegendTxt->GetFont();
+        LF.Size = 7;
+        LegendTxt->SetFont(LF);
+        LegendTxt->SetColorAndOpacity(FSlateColor(FLinearColor(0.4f, 0.45f, 0.5f, 1.0f)));
+        if (UHorizontalBoxSlot* HS = TitleRow->AddChildToHorizontalBox(LegendTxt))
+        {
+            HS->SetVerticalAlignment(VAlign_Center);
+        }
+    }
+
+    // ── Arena border line (thin line around the map area) ──────
+    {
+        UBorder* MapBorder = WidgetTree->ConstructWidget<UBorder>(UBorder::StaticClass());
+        MapBorder->SetBrushColor(FLinearColor(0.14f, 0.20f, 0.35f, 0.6f));
+        MapBorder->SetPadding(FMargin(1.0f));
+        if (UCanvasPanelSlot* CanvasSlot = Canvas->AddChildToCanvas(MapBorder))
+        {
+            CanvasSlot->SetAnchors(FAnchors(1.0f, 0.0f, 1.0f, 0.0f));
+            CanvasSlot->SetAlignment(FVector2D(0.0f, 0.0f));
+            // Map area starts at (MapLeft, MapTopY), size (MapW, MapH) — with 1px border
+            CanvasSlot->SetPosition(FVector2D(MMap::MapLeft - 1.0f, MMap::MapTopY - 1.0f));
+            CanvasSlot->SetSize(FVector2D(MMap::MapW + 2.0f, MMap::MapH + 2.0f));
+            CanvasSlot->SetAutoSize(false);
+        }
+    }
+
+    // ── NPC / static dots ──────────────────────────────────────
+    // Training dummy: red
+    MinimapDummyDot = MakeMinimapDot(WidgetTree, Canvas, FLinearColor(1.0f, 0.25f, 0.25f, 0.9f), MMap::DotSize);
+    // Training minion: orange
+    MinimapMinionDot = MakeMinimapDot(WidgetTree, Canvas, FLinearColor(1.0f, 0.55f, 0.10f, 0.9f), MMap::DotSize);
+    // Vendor: cyan
+    MinimapVendorDot = MakeMinimapDot(WidgetTree, Canvas, FLinearColor(0.20f, 0.80f, 1.0f, 0.9f), MMap::DotSize);
+
+    // ── Other-player dots (pool of 8, yellow) ─────────────────
+    MinimapOtherDots.Reset();
+    for (int32 i = 0; i < 8; ++i)
+    {
+        UBorder* Dot = MakeMinimapDot(WidgetTree, Canvas, FLinearColor(1.0f, 0.88f, 0.12f, 0.9f), MMap::DotSize);
+        if (Dot) { Dot->SetVisibility(ESlateVisibility::Collapsed); }
+        MinimapOtherDots.Add(Dot);
+    }
+
+    // ── Self dot (green, slightly larger) ─────────────────────
+    MinimapSelfDot = MakeMinimapDot(WidgetTree, Canvas, FLinearColor(0.22f, 1.0f, 0.45f, 1.0f), MMap::DotSize + 2.0f);
+}
+
+void UMOBAMMOGameHUDWidget::PlaceMinimapDot(UBorder* Dot, float WorldX, float WorldY) const
+{
+    if (!Dot) { return; }
+    UCanvasPanelSlot* CanvasSlot = Cast<UCanvasPanelSlot>(Dot->Slot);
+    if (!CanvasSlot) { return; }
+
+    // Normalise world position to [0,1] within arena
+    const float NormX = FMath::Clamp((WorldX - MMap::WMinX) / (MMap::WMaxX - MMap::WMinX), 0.0f, 1.0f);
+    const float NormY = FMath::Clamp((MMap::WMaxY - WorldY) / (MMap::WMaxY - MMap::WMinY), 0.0f, 1.0f); // Y flipped
+
+    // Map-relative pixel position
+    const float RelX = NormX * MMap::MapW;
+    const float RelY = NormY * MMap::MapH;
+
+    // Canvas slot position (anchor = top-right, alignment = top-left of dot)
+    const float SlotX = MMap::MapLeft + RelX - MMap::DotR;
+    const float SlotY = MMap::MapTopY + RelY - MMap::DotR;
+    CanvasSlot->SetPosition(FVector2D(SlotX, SlotY));
+}
+
+void UMOBAMMOGameHUDWidget::UpdateMinimap()
+{
+    if (!MinimapBg) { return; }
+    const UWorld* World = GetWorld();
+    if (!World) { return; }
+
+    const APlayerController* PC = GetOwningPlayer();
+    const AMOBAMMOGameState* GameState = World->GetGameState<AMOBAMMOGameState>();
+
+    // ── Self dot ──────────────────────────────────────────────
+    const APawn* LocalPawn = PC ? PC->GetPawn() : nullptr;
+    if (LocalPawn && MinimapSelfDot)
+    {
+        const FVector Pos = LocalPawn->GetActorLocation();
+        PlaceMinimapDot(MinimapSelfDot, Pos.X, Pos.Y);
+        MinimapSelfDot->SetVisibility(ESlateVisibility::HitTestInvisible);
+    }
+    else if (MinimapSelfDot)
+    {
+        MinimapSelfDot->SetVisibility(ESlateVisibility::Collapsed);
+    }
+
+    // ── Other players (iterate replicated character pawns) ────
+    int32 OtherIdx = 0;
+    for (TActorIterator<AMOBAMMOCharacter> It(World); It; ++It)
+    {
+        if (It->GetController() == PC) { continue; }
+        if (!MinimapOtherDots.IsValidIndex(OtherIdx)) { break; }
+
+        UBorder* Dot = MinimapOtherDots[OtherIdx];
+        if (Dot)
+        {
+            const FVector Pos = It->GetActorLocation();
+            PlaceMinimapDot(Dot, Pos.X, Pos.Y);
+            Dot->SetVisibility(ESlateVisibility::HitTestInvisible);
+        }
+        ++OtherIdx;
+    }
+    // Hide unused other-player dots
+    for (int32 i = OtherIdx; i < MinimapOtherDots.Num(); ++i)
+    {
+        if (MinimapOtherDots[i])
+        {
+            MinimapOtherDots[i]->SetVisibility(ESlateVisibility::Collapsed);
+        }
+    }
+
+    // ── Training Dummy dot (fixed position, color changes when dead) ──
+    if (MinimapDummyDot)
+    {
+        PlaceMinimapDot(MinimapDummyDot, 520.0f, 360.0f);
+        const bool bAlive = GameState && GameState->IsTrainingDummyAlive();
+        MinimapDummyDot->SetBrushColor(
+            bAlive ? FLinearColor(1.0f, 0.25f, 0.25f, 0.9f)
+                   : FLinearColor(0.35f, 0.35f, 0.35f, 0.45f));
+        MinimapDummyDot->SetVisibility(ESlateVisibility::HitTestInvisible);
+    }
+
+    // ── Training Minion dot (actor position, hide if respawning) ──
+    if (MinimapMinionDot)
+    {
+        bool bFound = false;
+        for (TActorIterator<AMOBAMMOTrainingMinionActor> It(World); It; ++It)
+        {
+            const FVector Pos = It->GetActorLocation();
+            PlaceMinimapDot(MinimapMinionDot, Pos.X, Pos.Y);
+            bFound = true;
+            break;
+        }
+        MinimapMinionDot->SetVisibility(
+            bFound ? ESlateVisibility::HitTestInvisible : ESlateVisibility::Collapsed);
+    }
+
+    // ── Vendor dot (fixed position) ──────────────────────────
+    if (MinimapVendorDot)
+    {
+        PlaceMinimapDot(MinimapVendorDot, -520.0f, 360.0f);
+        MinimapVendorDot->SetVisibility(ESlateVisibility::HitTestInvisible);
+    }
+}
+
+// ─────────────────────────────────────────────────────────────
 // Update
 // ─────────────────────────────────────────────────────────────
 void UMOBAMMOGameHUDWidget::UpdateTexts()
@@ -858,6 +1363,12 @@ void UMOBAMMOGameHUDWidget::UpdateTexts()
     float MaxHealth = 0.0f;
     float Mana = 0.0f;
     float MaxMana = 0.0f;
+    int32 CharacterExperience = 0;
+    int32 XPInLevel = 0;
+    int32 XPLevelSpan = 0;
+    float XPFraction = 0.0f;
+    bool bMaxLevel = false;
+    int32 PlayerGold = 0;
     float DamageCooldownRemaining = 0.0f;
     float HealCooldownRemaining = 0.0f;
     float DrainCooldownRemaining = 0.0f;
@@ -917,6 +1428,15 @@ void UMOBAMMOGameHUDWidget::UpdateTexts()
             CharacterName = PlayerState->GetCharacterName().IsEmpty() ? TEXT("Hero") : PlayerState->GetCharacterName();
             ClassId = PlayerState->GetClassId().IsEmpty() ? TEXT("-") : PlayerState->GetClassId();
             CharacterLevel = PlayerState->GetCharacterLevel();
+            CharacterExperience = PlayerState->GetCharacterExperience();
+            bMaxLevel = PlayerState->IsMaxLevel();
+            XPFraction = PlayerState->GetExperienceProgressFraction();
+            {
+                const int32 LevelStart = PlayerState->GetTotalXPForLevel(CharacterLevel);
+                const int32 LevelEnd   = PlayerState->GetTotalXPForLevel(CharacterLevel + 1);
+                XPInLevel   = FMath::Max(0, CharacterExperience - LevelStart);
+                XPLevelSpan = FMath::Max(0, LevelEnd - LevelStart);
+            }
             Health = PlayerState->GetCurrentHealth();
             MaxHealth = PlayerState->GetMaxHealth();
             Mana = PlayerState->GetCurrentMana();
@@ -929,6 +1449,7 @@ void UMOBAMMOGameHUDWidget::UpdateTexts()
             RespawnCooldownRemaining = PlayerState->GetRespawnCooldownRemaining(ServerWorldTimeSeconds);
             KillCount = PlayerState->GetKills();
             DeathCount = PlayerState->GetDeaths();
+            PlayerGold = PlayerState->GetGold();
             LifeState = PlayerState->IsAlive() ? TEXT("Alive") : TEXT("Dead");
             SelectedTargetCharacterId = PlayerState->GetSelectedTargetCharacterId();
 
@@ -1155,6 +1676,17 @@ void UMOBAMMOGameHUDWidget::UpdateTexts()
         PlayerClassLevelText->SetText(FText::FromString(FString::Printf(TEXT("%s  ·  Level %d"), *ClassId, CharacterLevel)));
     }
 
+    if (GoldText)
+    {
+        // Compact formatting: 1234 -> "1,234 g".  Avoids breaking the right-aligned slot at 6+ digit values.
+        FString GoldStr = FString::FromInt(PlayerGold);
+        for (int32 InsertAt = GoldStr.Len() - 3; InsertAt > 0; InsertAt -= 3)
+        {
+            GoldStr.InsertAt(InsertAt, TEXT(","));
+        }
+        GoldText->SetText(FText::FromString(FString::Printf(TEXT("%s g"), *GoldStr)));
+    }
+
     if (PlayerLifeStateText)
     {
         const bool bAlive = LifeState == TEXT("Alive");
@@ -1175,6 +1707,52 @@ void UMOBAMMOGameHUDWidget::UpdateTexts()
     if (ManaBar)
     {
         ManaBar->SetPercent(MaxMana > 0.0f ? Mana / MaxMana : 0.0f);
+    }
+
+    // ── XP bar + level-up flash ──
+    if (XPBar)
+    {
+        XPBar->SetPercent(bMaxLevel ? 1.0f : XPFraction);
+        XPBar->SetFillColorAndOpacity(bMaxLevel ? HUDColors::TextGold : HUDColors::XPFill);
+    }
+    if (XPValueText)
+    {
+        if (bMaxLevel)
+        {
+            XPValueText->SetText(FText::FromString(TEXT("LEVEL MAX")));
+        }
+        else
+        {
+            XPValueText->SetText(FText::FromString(FString::Printf(TEXT("XP %d / %d"), XPInLevel, XPLevelSpan)));
+        }
+    }
+
+    // Level-up detection: fire the flash when CharacterLevel increases.
+    if (CachedCharacterLevel == 0)
+    {
+        // First read after spawn — seed without flashing.
+        CachedCharacterLevel = CharacterLevel;
+    }
+    else if (CharacterLevel > CachedCharacterLevel)
+    {
+        LevelUpFlashRemaining = 3.0f;
+        CachedCharacterLevel = CharacterLevel;
+    }
+
+    if (LevelUpFlashText)
+    {
+        const float FlashAlpha = LevelUpFlashRemaining > 0.0f
+            ? FMath::Clamp(LevelUpFlashRemaining / 3.0f, 0.0f, 1.0f)
+            : 0.0f;
+        if (FlashAlpha > 0.0f)
+        {
+            LevelUpFlashText->SetText(FText::FromString(FString::Printf(TEXT("LEVEL UP!  ·  Level %d"), CharacterLevel)));
+            LevelUpFlashText->SetColorAndOpacity(FSlateColor(FLinearColor(1.0f, 0.84f, 0.40f, FlashAlpha)));
+        }
+        else
+        {
+            LevelUpFlashText->SetText(FText::GetEmpty());
+        }
     }
 
     if (ManaValueText)
@@ -1227,6 +1805,24 @@ void UMOBAMMOGameHUDWidget::UpdateTexts()
         SaveConnectionText->SetText(FText::FromString(SaveDisplay));
         SaveConnectionText->SetColorAndOpacity(FSlateColor(SaveColor));
         SaveConnectionText->SetToolTipText(FText::FromString(SaveErrorMessage.IsEmpty() ? TEXT("Backend save connection healthy.") : SaveErrorMessage));
+
+        // Skill point indicator
+        if (SkillPointText)
+        {
+            const AMOBAMMOPlayerState* PSLocal = GetOwningPlayer()
+                ? GetOwningPlayer()->GetPlayerState<AMOBAMMOPlayerState>() : nullptr;
+            const int32 SP = PSLocal ? PSLocal->GetSkillPoints() : 0;
+            if (SP > 0)
+            {
+                SkillPointText->SetText(FText::FromString(
+                    FString::Printf(TEXT("★ %d SP  [F1-F4]"), SP)));
+                SkillPointText->SetVisibility(ESlateVisibility::Visible);
+            }
+            else
+            {
+                SkillPointText->SetVisibility(ESlateVisibility::Collapsed);
+            }
+        }
     }
 
     // ── Target Frame ──
@@ -1303,18 +1899,54 @@ void UMOBAMMOGameHUDWidget::UpdateTexts()
         CombatLogText->SetText(FText::FromString(LogDisplay));
     }
 
+    // ── Chat History ──
+    if (ChatHistoryText)
+    {
+        if (const UWorld* World = GetWorld())
+        {
+            if (const AMOBAMMOGameState* GameState = World->GetGameState<AMOBAMMOGameState>())
+            {
+                const TArray<FString>& ChatMsgs = GameState->GetChatMessages();
+                if (ChatMsgs.IsEmpty())
+                {
+                    ChatHistoryText->SetText(FText::GetEmpty());
+                }
+                else
+                {
+                    FString ChatDisplay;
+                    // Show last 4 messages (array is newest-first)
+                    for (int32 i = FMath::Min(ChatMsgs.Num(), 4) - 1; i >= 0; --i)
+                    {
+                        if (!ChatDisplay.IsEmpty())
+                        {
+                            ChatDisplay += TEXT("\n");
+                        }
+                        ChatDisplay += ChatMsgs[i];
+                    }
+                    ChatHistoryText->SetText(FText::FromString(ChatDisplay));
+                }
+            }
+        }
+    }
+
     // ── Action Hint ──
+    const TArray<FMOBAMMOAbilityDefinition> AbilityDefinitions = MOBAMMOAbilitySet::ForClass(ClassId);
+    const FMOBAMMOAbilityDefinition DamageAbility = AbilityDefinitions.IsValidIndex(0) ? AbilityDefinitions[0] : MOBAMMOAbilitySet::ArcBurst();
+    const FMOBAMMOAbilityDefinition DrainAbility = AbilityDefinitions.IsValidIndex(2) ? AbilityDefinitions[2] : MOBAMMOAbilitySet::DrainPulse();
+    const FMOBAMMOAbilityDefinition ManaSurgeAbility = AbilityDefinitions.IsValidIndex(3) ? AbilityDefinitions[3] : MOBAMMOAbilitySet::ManaSurge();
+    const FMOBAMMOAbilityDefinition RespawnAbility = AbilityDefinitions.IsValidIndex(4) ? AbilityDefinitions[4] : MOBAMMOAbilitySet::Reforge();
+
     FString ActionHintDisplay;
     if (LifeState == TEXT("Dead"))
     {
         ActionHintDisplay = RespawnCooldownRemaining > KINDA_SMALL_NUMBER
-            ? FString::Printf(TEXT("Reforge charging... %.1fs"), RespawnCooldownRemaining)
-            : TEXT("Press [5] to Reforge");
+            ? FString::Printf(TEXT("%s charging... %.1fs"), *RespawnAbility.Name, RespawnCooldownRemaining)
+            : FString::Printf(TEXT("Press [5] to %s"), *RespawnAbility.Name);
     }
     else if (!bHasTarget)
     {
         ActionHintDisplay = MinionThreatDisplay.IsEmpty()
-            ? TEXT("Aim at Training Dummy and press [LMB]/[E], or press [6]. Then use [1] Arc Burst / [3] Drain Pulse")
+            ? FString::Printf(TEXT("Aim at Training Dummy and press [LMB]/[E], or press [6]. Then use [1] %s / [3] %s"), *DamageAbility.Name, *DrainAbility.Name)
             : MinionThreatDisplay;
     }
     else if (!bTargetInRange)
@@ -1323,15 +1955,15 @@ void UMOBAMMOGameHUDWidget::UpdateTexts()
     }
     else if (DamageCooldownRemaining > KINDA_SMALL_NUMBER)
     {
-        ActionHintDisplay = FString::Printf(TEXT("Arc Burst in %.1fs — use Renew or Drain Pulse"), DamageCooldownRemaining);
+        ActionHintDisplay = FString::Printf(TEXT("%s in %.1fs - use [2] or [3]"), *DamageAbility.Name, DamageCooldownRemaining);
     }
-    else if (Mana < MOBAMMOAbilitySet::ArcBurst().ManaCost)
+    else if (Mana < DamageAbility.ManaCost)
     {
-        ActionHintDisplay = TEXT("Low mana — use Mana Surge first");
+        ActionHintDisplay = FString::Printf(TEXT("Low mana - use %s first"), *ManaSurgeAbility.Name);
     }
     else
     {
-        ActionHintDisplay = TEXT("Target exposed — Arc Burst ready!");
+        ActionHintDisplay = FString::Printf(TEXT("Target exposed - %s ready!"), *DamageAbility.Name);
     }
 
     if (ActionHintText)
@@ -1344,7 +1976,8 @@ void UMOBAMMOGameHUDWidget::UpdateTexts()
     {
         if (ArcChargeRemaining > KINDA_SMALL_NUMBER)
         {
-            ArcChargeText->SetText(FText::FromString(FString::Printf(TEXT("⚡ ARC CHARGE  %.1fs"), ArcChargeRemaining)));
+            const FString ChargeLabel = ClassId.Equals(TEXT("mage"), ESearchCase::IgnoreCase) ? TEXT("SAGE FOCUS") : TEXT("ARC CHARGE");
+            ArcChargeText->SetText(FText::FromString(FString::Printf(TEXT("* %s  %.1fs"), *ChargeLabel, ArcChargeRemaining)));
             ArcChargeText->SetVisibility(ESlateVisibility::Visible);
         }
         else
@@ -1361,8 +1994,8 @@ void UMOBAMMOGameHUDWidget::UpdateTexts()
         RespawnHintText->SetVisibility(bShowRespawnHint ? ESlateVisibility::Visible : ESlateVisibility::Collapsed);
         RespawnHintText->SetText(FText::FromString(
             RespawnCooldownRemaining > KINDA_SMALL_NUMBER
-                ? FString::Printf(TEXT("YOU ARE DOWN\nReforge in %.1fs"), RespawnCooldownRemaining)
-                : TEXT("YOU ARE DOWN\nPress [5] to Reforge")
+                ? FString::Printf(TEXT("YOU ARE DOWN\n%s in %.1fs"), *RespawnAbility.Name, RespawnCooldownRemaining)
+                : FString::Printf(TEXT("YOU ARE DOWN\nPress [5] to %s"), *RespawnAbility.Name)
         ));
     }
 
@@ -1380,26 +2013,16 @@ void UMOBAMMOGameHUDWidget::UpdateTexts()
     }
 
     // ── Ability Bar ──
-    const FMOBAMMOAbilityDefinition ArcBurst = MOBAMMOAbilitySet::ArcBurst();
-    const FMOBAMMOAbilityDefinition Renew = MOBAMMOAbilitySet::Renew();
-    const FMOBAMMOAbilityDefinition DrainPulse = MOBAMMOAbilitySet::DrainPulse();
-    const FMOBAMMOAbilityDefinition ManaSurge = MOBAMMOAbilitySet::ManaSurge();
-    const FMOBAMMOAbilityDefinition Reforge = MOBAMMOAbilitySet::Reforge();
-
-    const TArray<FMOBAMMOAbilityDefinition> AbilityDefinitions = {
-        ArcBurst, Renew, DrainPulse, ManaSurge, Reforge
-    };
-
     for (int32 AbilityIndex = 0; AbilityIndex < AbilityDefinitions.Num(); ++AbilityIndex)
     {
         const FMOBAMMOAbilityDefinition& Def = AbilityDefinitions[AbilityIndex];
         const bool bHasCooldown = Def.Cooldown > KINDA_SMALL_NUMBER;
         float CooldownRemaining = 0.0f;
 
-        if (Def.Name == ArcBurst.Name)        CooldownRemaining = DamageCooldownRemaining;
-        else if (Def.Name == Renew.Name)      CooldownRemaining = HealCooldownRemaining;
-        else if (Def.Name == DrainPulse.Name)  CooldownRemaining = DrainCooldownRemaining;
-        else if (Def.Name == ManaSurge.Name)   CooldownRemaining = ManaSurgeCooldownRemaining;
+        if (Def.Slot == 1)        CooldownRemaining = DamageCooldownRemaining;
+        else if (Def.Slot == 2)   CooldownRemaining = HealCooldownRemaining;
+        else if (Def.Slot == 3)   CooldownRemaining = DrainCooldownRemaining;
+        else if (Def.Slot == 4)   CooldownRemaining = ManaSurgeCooldownRemaining;
 
         // Determine state
         FString StateLabel = TEXT("READY");
@@ -1443,23 +2066,23 @@ void UMOBAMMOGameHUDWidget::UpdateTexts()
                 StateColor = HUDColors::TextSuccess;
             }
         }
-        else if (Def.Name == DrainPulse.Name && !bHasTarget)
+        else if (Def.Slot == 3 && !bHasTarget)
         {
             StateLabel = TEXT("NO TGT");
             StateColor = HUDColors::TextSecondary;
             BarColor = HUDColors::AbilityNoTarget;
             BorderColor = FLinearColor(0.32f, 0.16f, 0.12f, 0.50f);
         }
-        else if (Def.Name == DrainPulse.Name && !bTargetInRange)
+        else if (Def.Slot == 3 && !bTargetInRange)
         {
             StateLabel = TEXT("FAR");
             StateColor = HUDColors::TextDanger;
             BarColor = HUDColors::AbilityNoTarget;
             BorderColor = FLinearColor(0.32f, 0.16f, 0.12f, 0.50f);
         }
-        else if (Def.Name == ArcBurst.Name && ArcChargeRemaining > KINDA_SMALL_NUMBER)
+        else if (Def.Slot == 1 && ArcChargeRemaining > KINDA_SMALL_NUMBER)
         {
-            StateLabel = FString::Printf(TEXT("⚡ %.1fs"), ArcChargeRemaining);
+            StateLabel = FString::Printf(TEXT("* %.1fs"), ArcChargeRemaining);
             StateColor = HUDColors::TextCyan;
             BarColor = HUDColors::AbilityCharged;
             BorderColor = FLinearColor(0.30f, 0.70f, 1.00f, 0.80f);
@@ -1506,11 +2129,194 @@ void UMOBAMMOGameHUDWidget::UpdateTexts()
             AbilityStateTexts[AbilityIndex]->SetColorAndOpacity(FSlateColor(StateColor));
         }
 
+        if (AbilityNameTexts.IsValidIndex(AbilityIndex) && AbilityNameTexts[AbilityIndex])
+        {
+            // Show ability rank if above 1 (e.g. "Arc Burst Lv.3")
+            FString AbilityLabel = Def.Name;
+            const AMOBAMMOPlayerState* PSForAbility = GetOwningPlayer()
+                ? GetOwningPlayer()->GetPlayerState<AMOBAMMOPlayerState>() : nullptr;
+            if (PSForAbility && AbilityIndex < 4) // only player abilities 0-3 have ranks
+            {
+                const int32 Rank = PSForAbility->GetAbilityRank(AbilityIndex);
+                if (Rank > 1)
+                {
+                    AbilityLabel = FString::Printf(TEXT("%s Lv.%d"), *Def.Name, Rank);
+                }
+                // Glow slot border gold if upgradeable (skill points available, not max rank)
+                if (PSForAbility->CanUpgradeAbility(AbilityIndex) && AbilitySlotBorders.IsValidIndex(AbilityIndex))
+                {
+                    AbilitySlotBorders[AbilityIndex]->SetBrushColor(FLinearColor(0.85f, 0.65f, 0.05f, 0.75f));
+                }
+            }
+            AbilityNameTexts[AbilityIndex]->SetText(FText::FromString(AbilityLabel));
+        }
+
         if (AbilityCooldownBars.IsValidIndex(AbilityIndex) && AbilityCooldownBars[AbilityIndex])
         {
             AbilityCooldownBars[AbilityIndex]->SetPercent(BarPercent);
             AbilityCooldownBars[AbilityIndex]->SetFillColorAndOpacity(BarColor);
         }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────
+// Layout: Quest / Objective Panel (top-left, below combat log)
+// ─────────────────────────────────────────────────────────────
+void UMOBAMMOGameHUDWidget::BuildQuestPanel(UCanvasPanel* Canvas)
+{
+    // Constants — panel sits just below the combat log (20,20,340,180)
+    static constexpr float PanelX  = 20.0f;
+    static constexpr float PanelY  = 210.0f;   // combat log bottom = 20+180 = 200, +10 gap
+    static constexpr float PanelW  = 230.0f;
+    static constexpr int32 MaxRows = 5;
+    static constexpr float RowH    = 18.0f;
+    static constexpr float TitleH  = 20.0f;
+    static constexpr float PadV    = 6.0f;
+    const float PanelH = TitleH + PadV + MaxRows * RowH + PadV;
+
+    // Background panel
+    QuestPanelBorder = MakeGlassPanel(FLinearColor(0.01f, 0.015f, 0.03f), 0.80f);
+    QuestPanelBorder->SetPadding(FMargin(0.0f));
+
+    if (UCanvasPanelSlot* QSlot = Canvas->AddChildToCanvas(QuestPanelBorder))
+    {
+        QSlot->SetAnchors(FAnchors(0.0f, 0.0f, 0.0f, 0.0f));
+        QSlot->SetAlignment(FVector2D(0.0f, 0.0f));
+        QSlot->SetPosition(FVector2D(PanelX, PanelY));
+        QSlot->SetSize(FVector2D(PanelW, PanelH));
+        QSlot->SetAutoSize(false);
+    }
+
+    // Inner vertical box
+    UVerticalBox* VBox = WidgetTree->ConstructWidget<UVerticalBox>(UVerticalBox::StaticClass());
+    if (UBorderSlot* BS = Cast<UBorderSlot>(QuestPanelBorder->AddChild(VBox)))
+    {
+        BS->SetPadding(FMargin(0.0f));
+    }
+
+    // Title bar
+    {
+        UBorder* TitleBg = WidgetTree->ConstructWidget<UBorder>(UBorder::StaticClass());
+        TitleBg->SetBrushColor(FLinearColor(0.02f, 0.03f, 0.07f, 1.0f));
+        TitleBg->SetPadding(FMargin(8.0f, 3.0f));
+        if (UVerticalBoxSlot* VS = VBox->AddChildToVerticalBox(TitleBg))
+        {
+            VS->SetSize(FSlateChildSize(ESlateSizeRule::Automatic));
+        }
+        UTextBlock* Title = WidgetTree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass());
+        Title->SetText(FText::FromString(TEXT("OBJECTIVES")));
+        FSlateFontInfo TF = Title->GetFont();
+        TF.Size = 9;
+        TF.TypefaceFontName = TEXT("Bold");
+        Title->SetFont(TF);
+        Title->SetColorAndOpacity(FSlateColor(FLinearColor(0.55f, 0.70f, 1.0f, 1.0f)));
+        TitleBg->SetContent(Title);
+    }
+
+    // Spacer
+    {
+        USpacer* Sp = WidgetTree->ConstructWidget<USpacer>(USpacer::StaticClass());
+        Sp->SetSize(FVector2D(1.0f, PadV));
+        if (UVerticalBoxSlot* VS = VBox->AddChildToVerticalBox(Sp))
+        {
+            VS->SetSize(FSlateChildSize(ESlateSizeRule::Automatic));
+        }
+    }
+
+    // Quest rows
+    QuestRowTexts.Reset();
+    const TArray<FMOBAMMOQuestDefinition>& AllQuests = UMOBAMMOQuestCatalog::GetAllQuests();
+    for (int32 i = 0; i < MaxRows; ++i)
+    {
+        UTextBlock* Row = WidgetTree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass());
+        if (AllQuests.IsValidIndex(i))
+        {
+            Row->SetText(FText::FromString(FString::Printf(TEXT("○ %s"), *AllQuests[i].DisplayName)));
+        }
+        else
+        {
+            Row->SetText(FText::FromString(TEXT("")));
+        }
+        FSlateFontInfo RF = Row->GetFont();
+        RF.Size = 9;
+        Row->SetFont(RF);
+        Row->SetColorAndOpacity(FSlateColor(FLinearColor(0.7f, 0.7f, 0.7f, 1.0f)));
+
+        UBorder* RowBg = WidgetTree->ConstructWidget<UBorder>(UBorder::StaticClass());
+        RowBg->SetBrushColor(FLinearColor(0.0f, 0.0f, 0.0f, 0.0f));
+        RowBg->SetPadding(FMargin(8.0f, 2.0f));
+        RowBg->SetContent(Row);
+
+        if (UVerticalBoxSlot* VS = VBox->AddChildToVerticalBox(RowBg))
+        {
+            VS->SetSize(FSlateChildSize(ESlateSizeRule::Automatic));
+        }
+        QuestRowTexts.Add(Row);
+    }
+}
+
+void UMOBAMMOGameHUDWidget::UpdateQuestPanel()
+{
+    if (!QuestPanelBorder || QuestRowTexts.Num() == 0)
+    {
+        return;
+    }
+
+    const AMOBAMMOPlayerState* PS = nullptr;
+    if (const APlayerController* PC = GetOwningPlayer())
+    {
+        PS = PC->GetPlayerState<AMOBAMMOPlayerState>();
+    }
+
+    const TArray<FMOBAMMOQuestDefinition>& AllQuests = UMOBAMMOQuestCatalog::GetAllQuests();
+
+    for (int32 i = 0; i < QuestRowTexts.Num(); ++i)
+    {
+        UTextBlock* Row = QuestRowTexts[i];
+        if (!Row || !AllQuests.IsValidIndex(i))
+        {
+            if (Row) { Row->SetText(FText::FromString(TEXT(""))); }
+            continue;
+        }
+
+        const FMOBAMMOQuestDefinition& Def = AllQuests[i];
+
+        // Find progress for this quest
+        int32 Current   = 0;
+        bool  bComplete = false;
+        if (PS)
+        {
+            for (const FMOBAMMOQuestProgress& P : PS->GetQuestProgress())
+            {
+                if (P.QuestId == Def.QuestId)
+                {
+                    Current   = P.CurrentCount;
+                    bComplete = P.bCompleted;
+                    break;
+                }
+            }
+        }
+
+        FString Label;
+        FLinearColor Color;
+
+        if (bComplete)
+        {
+            Label = FString::Printf(TEXT("✓ %s"), *Def.DisplayName);
+            Color = FLinearColor(0.25f, 1.0f, 0.40f, 1.0f);   // green
+        }
+        else
+        {
+            const int32 Target = Def.TargetCount;
+            const FString Progress = (Target > 1)
+                ? FString::Printf(TEXT(" (%d/%d)"), Current, Target)
+                : FString();
+            Label = FString::Printf(TEXT("○ %s%s"), *Def.DisplayName, *Progress);
+            Color = FLinearColor(0.75f, 0.75f, 0.75f, 1.0f);   // gray-white
+        }
+
+        Row->SetText(FText::FromString(Label));
+        Row->SetColorAndOpacity(FSlateColor(Color));
     }
 }
 

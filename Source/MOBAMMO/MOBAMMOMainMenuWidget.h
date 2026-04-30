@@ -7,6 +7,9 @@
 #include "MOBAMMOMainMenuWidget.generated.h"
 
 class UMOBAMMOBackendSubsystem;
+class UBorder;
+class UButton;
+class UTextBlock;
 class UWebBrowser;
 
 UCLASS(BlueprintType, Blueprintable)
@@ -35,9 +38,19 @@ private:
     void BuildLayout();
     void BindToSubsystem(UMOBAMMOBackendSubsystem* BackendSubsystem);
     void PushStateToWebUI();
+    void UpdateNativeFallback();
 
     UFUNCTION()
     void HandleConsoleMessage(const FString& Message, const FString& Source, int32 Line);
+
+    UFUNCTION()
+    void HandleNativePlayClicked();
+
+    UFUNCTION()
+    void HandleNativeCharactersClicked();
+
+    UFUNCTION()
+    void HandleNativeQuitClicked();
 
     UFUNCTION()
     void HandleBackendStateChanged();
@@ -56,6 +69,18 @@ private:
 
     UPROPERTY(Transient)
     UWebBrowser* WebBrowserWidget;
+
+    UPROPERTY(Transient)
+    UBorder* NativeFallbackPanel;
+
+    UPROPERTY(Transient)
+    UTextBlock* NativeFallbackStatusText;
+
+    UPROPERTY(Transient)
+    UButton* NativePlayButton;
+
+    UPROPERTY(Transient)
+    UButton* NativeCharactersButton;
 
     bool bBoundToSubsystem = false;
     bool bPageLoaded = false;

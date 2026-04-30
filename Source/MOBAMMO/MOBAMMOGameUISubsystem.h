@@ -10,6 +10,8 @@ class UMOBAMMOGameHUDWidget;
 class UMOBAMMOLoginScreenWidget;
 class UMOBAMMOLoadingScreenWidget;
 class UMOBAMMOMainMenuWidget;
+class UMOBAMMOPauseMenuWidget;
+class UMOBAMMOVendorWidget;
 
 UCLASS()
 class MOBAMMO_API UMOBAMMOGameUISubsystem : public UGameInstanceSubsystem
@@ -22,6 +24,33 @@ public:
 
     UFUNCTION(BlueprintCallable, Category="HUD")
     void ToggleInventory();
+
+    UFUNCTION(BlueprintCallable, Category="HUD")
+    void OpenChat();
+
+    UFUNCTION(BlueprintCallable, Category="HUD")
+    void CloseChat();
+
+    UFUNCTION(BlueprintPure, Category="HUD")
+    bool IsChatOpen() const;
+
+    UFUNCTION(BlueprintCallable, Category="HUD")
+    void TogglePauseMenu();
+
+    UFUNCTION(BlueprintPure, Category="HUD")
+    bool IsPauseMenuVisible() const;
+
+    UFUNCTION(BlueprintCallable, Category="HUD")
+    void ToggleVendor();
+
+    UFUNCTION(BlueprintCallable, Category="HUD")
+    void OpenVendor();
+
+    UFUNCTION(BlueprintCallable, Category="HUD")
+    void CloseVendor();
+
+    UFUNCTION(BlueprintPure, Category="HUD")
+    bool IsVendorOpen() const;
 
 private:
     bool Tick(float DeltaTime);
@@ -55,4 +84,10 @@ private:
 
     UPROPERTY(Transient)
     TObjectPtr<UMOBAMMOGameHUDWidget> HUDWidget;
+
+    UPROPERTY(Transient)
+    TObjectPtr<UMOBAMMOPauseMenuWidget> PauseMenuWidget;
+
+    UPROPERTY(Transient)
+    TObjectPtr<UMOBAMMOVendorWidget> VendorWidget;
 };
