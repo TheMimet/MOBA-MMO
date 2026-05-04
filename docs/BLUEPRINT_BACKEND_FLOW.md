@@ -104,9 +104,9 @@ powershell -ExecutionPolicy Bypass -File .\scripts\stop-server.ps1
 ```
 
 ## Sonraki Geliştirme
-Bu ilk sürümden sonra şu iyileştirmeler yapılmalı:
-- `GET /characters` ile karakter listeleme
-- widget tabanlı login ekranı
-- karakter zaten varsa yeniden oluşturmak yerine seçmek
-- token/account state'ini GameInstance içinde saklamak
-- logout ve save akışı
+Bu ilk sürümden sonra hedeflenen maddeler ve mevcut durum:
+- [x] `GET /characters` ile karakter listeleme (backend + karakter akisi arayuzu hazir)
+- [x] widget tabanli login ekrani (native + Blueprint fallback)
+- [x] karakter zaten varsa yeniden olusturmak yerine secmek (Character Flow UI)
+- [x] token/account state'ini GameInstance icinde saklamak (BackendSubsystem: LastAccountId/LastAuthToken)
+- [ ] logout ve final save kapatma akisinin client ve dedicated server tarafinda tamamlanmasi

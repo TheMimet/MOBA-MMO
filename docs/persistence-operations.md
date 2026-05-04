@@ -96,5 +96,17 @@ Test sunlari dogrular:
 
 ## Siradaki Roadmap
 
-1. Dedicated server secret rotasyonu icin deploy ortamina ozel secret kaynagini netlestirmek.
-2. Persistence telemetry icin daha detayli olay gecmisi veya metrik backend entegrasyonu eklemek.
+1. Dedicated server secret rotasyonu ve kaynak kararini netlestirmek.
+   - Staging/production icin tek kaynak tanimi (secret manager, CI vault, veya environment injection).
+   - Rotasyon icin gecici cift-secret penceresi ve eski secret’in grace-period ile kapatilmasi.
+2. Persistence telemetry detaylandirmasi.
+   - Save/heartbeat latency, hata kodu dagilimi, client build etiketi gibi metriklerin eklenmesi.
+   - Gunluk/haftalik ozet export (CSV/JSON) ve ops paneli icin sabit sorgu setleri.
+3. Logout + final save kapanis akisi.
+   - Client logout -> `/session/end` kapanisi ve ani kopma senaryolari icin server shutdown hook’u.
+
+## Operasyonel Test Plani
+
+- Persistence/policy degisikliginde: `scripts/test-session-resume.ps1`, `scripts/test-runtime-reconnect.ps1`, `scripts/test-arena-bounds.ps1` smoke testleri.
+- Backend veya dedicated server deployu oncesi: en az bir kez reconnect + arena bounds testi.
+- Otomasyon hedefi: geceleyin/haftalik periyotla smoke testleri calistiran basit bir scheduled job veya CI workflow.

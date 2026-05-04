@@ -14,6 +14,14 @@ Use `TamBaslatma.bat` for the normal one-click local flow: database/backend, ded
 
 Persistence/session operations are documented in `docs/persistence-operations.md`.
 
+## Server Roadmap (Next)
+
+- Logout + final save kapanis akisini client ve dedicated server tarafinda tamamlamak.
+- Session-server secret rotasyonu icin deploy ortami secret kaynagini netlestirmek (bkz. `docs/persistence-operations.md`).
+- Persistence telemetry icin latency/hata/multiplayer metriklerini genisletmek.
+- Ops smoke testlerini (resume/reconnect/arena bounds) duzenli calistirma ve otomasyon planini netlestirmek.
+- Gameplay server oncelikleri: ability execution pipeline (cooldown/mana), server-dogrulama hasar/heal kaynagi, temel combat event loglama.
+
 ## Development Log
 
 ### 2026-04-17
