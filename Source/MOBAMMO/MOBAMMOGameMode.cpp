@@ -5,11 +5,13 @@
 #include "GameFramework/Pawn.h"
 #include "Kismet/GameplayStatics.h"
 #include "MOBAMMOAbilitySet.h"
+#include "MOBAMMOAICharacter.h"
 #include "MOBAMMOBackendSubsystem.h"
 #include "MOBAMMOCharacter.h"
 #include "MOBAMMOGameState.h"
 #include "MOBAMMOPlayerController.h"
 #include "MOBAMMOPlayerState.h"
+#include "MOBAMMOSpawnPoint.h"
 #include "MOBAMMOTrainingDummyActor.h"
 #include "MOBAMMOTrainingMinionActor.h"
 #include "MOBAMMOVendorActor.h"
@@ -19,6 +21,7 @@
 #include "UObject/ConstructorHelpers.h"
 #include "GameFramework/Character.h"
 #include "GameFramework/CharacterMovementComponent.h"
+#include "EngineUtils.h"
 
 namespace
 {
@@ -138,6 +141,12 @@ AMOBAMMOGameMode::AMOBAMMOGameMode()
     PlayerControllerClass = AMOBAMMOPlayerController::StaticClass();
 
     DefaultPawnClass = AMOBAMMOCharacter::StaticClass();
+}
+
+void AMOBAMMOGameMode::BeginPlay()
+{
+    Super::BeginPlay();
+    CollectSpawnPoints();
 }
 
 FString AMOBAMMOGameMode::InitNewPlayer(APlayerController* NewPlayerController, const FUniqueNetIdRepl& UniqueId, const FString& Options, const FString& Portal)
@@ -946,6 +955,17 @@ bool AMOBAMMOGameMode::CastDebugDamageSpell(AController* InstigatorController)
         return false;
     }
 
+    // ── Faction guard: block friendly-fire between Allied players ─
+    if (!IsValidDamageTarget(InstigatorController, TargetController ? TargetController->GetPawn() : nullptr))
+    {
+        PushCombatLog(FString::Printf(
+            TEXT("%s cannot target %s — they are on the same faction."),
+            *InstigatorState->GetPlayerName(),
+            *TargetState->GetPlayerName()
+        ));
+        return false;
+    }
+
     if (!IsControllerInAbilityRange(InstigatorController, TargetController, DebugDamageSpellRange))
     {
         PushCombatLog(FString::Printf(
@@ -1217,6 +1237,17 @@ bool AMOBAMMOGameMode::CastDebugDrainSpell(AController* InstigatorController)
         return false;
     }
 
+    // ── Faction guard: drain only works on hostile targets ────────
+    if (!IsValidDamageTarget(InstigatorController, TargetController ? TargetController->GetPawn() : nullptr))
+    {
+        PushCombatLog(FString::Printf(
+            TEXT("%s cannot drain %s — they are on the same faction."),
+            *InstigatorState->GetPlayerName(),
+            *TargetState->GetPlayerName()
+        ));
+        return false;
+    }
+
     const float ServerWorldTimeSeconds = GetWorld() ? GetWorld()->GetTimeSeconds() : 0.0f;
     const float CooldownRemaining = InstigatorState->GetDrainCooldownRemaining(ServerWorldTimeSeconds);
     if (CooldownRemaining > KINDA_SMALL_NUMBER)
@@ -1340,6 +1371,84 @@ bool AMOBAMMOGameMode::UseFirstInventoryConsumable(AController* InstigatorContro
     PushCombatLog(FString::Printf(TEXT("%s used %s (%s)."), *InstigatorState->GetPlayerName(), *GetInventoryItemDisplayName(SelectedItemId), *RestoreText));
     SavePlayerProgress(InstigatorController);
     return true;
+}
+
+bool AMOBAMMOGameMode::UseInventoryItem(AController* InstigatorController, const FString& ItemId)
+{
+    AMOBAMMOPlayerState* InstigatorState = ResolveMOBAPlayerState(InstigatorController);
+    if (!InstigatorState || ItemId.IsEmpty())
+    {
+        return false;
+    }
+
+    const FMOBAMMOInventoryItem* InventoryItem = InstigatorState->GetInventoryItems().FindByPredicate([&ItemId](const FMOBAMMOInventoryItem& Item)
+    {
+        return Item.ItemId == ItemId && Item.Quantity > 0;
+    });
+
+    if (!InventoryItem)
+    {
+        PushCombatLog(FString::Printf(TEXT("%s tried to use an item that is no longer in inventory."), *InstigatorState->GetPlayerName()));
+        return false;
+    }
+
+    float HealthRestore = 0.0f;
+    float ManaRestore = 0.0f;
+    if (TryGetConsumableUseForItem(ItemId, HealthRestore, ManaRestore))
+    {
+        const bool bCanRestoreHealth = HealthRestore > 0.0f && InstigatorState->GetCurrentHealth() < InstigatorState->GetMaxHealth();
+        const bool bCanRestoreMana = ManaRestore > 0.0f && InstigatorState->GetCurrentMana() < InstigatorState->GetMaxMana();
+        if (!bCanRestoreHealth && !bCanRestoreMana)
+        {
+            PushCombatLog(FString::Printf(TEXT("%s cannot use %s right now."), *InstigatorState->GetPlayerName(), *GetInventoryItemDisplayName(ItemId)));
+            return false;
+        }
+
+        const float HealthRecovered = HealthRestore > 0.0f ? InstigatorState->ApplyHealing(HealthRestore) : 0.0f;
+        const float ManaRecovered = ManaRestore > 0.0f ? InstigatorState->RestoreMana(ManaRestore) : 0.0f;
+        if (HealthRecovered <= 0.0f && ManaRecovered <= 0.0f)
+        {
+            return false;
+        }
+
+        if (!InstigatorState->ConsumeInventoryItem(ItemId, 1))
+        {
+            return false;
+        }
+
+        const FString RestoreText = HealthRecovered > 0.0f
+            ? FString::Printf(TEXT("+%.0f HP"), HealthRecovered)
+            : FString::Printf(TEXT("+%.0f MP"), ManaRecovered);
+        PushCombatLog(FString::Printf(TEXT("%s used %s (%s)."), *InstigatorState->GetPlayerName(), *GetInventoryItemDisplayName(ItemId), *RestoreText));
+        SavePlayerProgress(InstigatorController);
+        return true;
+    }
+
+    int32 EquipSlot = -1;
+    if (TryGetEquipSlotForItem(ItemId, EquipSlot))
+    {
+        if (InventoryItem->SlotIndex == EquipSlot)
+        {
+            if (InstigatorState->UnequipInventoryItem(ItemId))
+            {
+                PushCombatLog(FString::Printf(TEXT("%s unequipped %s."), *InstigatorState->GetPlayerName(), *GetInventoryItemDisplayName(ItemId)));
+                SavePlayerProgress(InstigatorController);
+                return true;
+            }
+            return false;
+        }
+
+        if (InstigatorState->EquipInventoryItem(ItemId, EquipSlot))
+        {
+            PushCombatLog(FString::Printf(TEXT("%s equipped %s."), *InstigatorState->GetPlayerName(), *GetInventoryItemDisplayName(ItemId)));
+            SavePlayerProgress(InstigatorController);
+            return true;
+        }
+        return false;
+    }
+
+    PushCombatLog(FString::Printf(TEXT("%s cannot use %s."), *InstigatorState->GetPlayerName(), *GetInventoryItemDisplayName(ItemId)));
+    return false;
 }
 
 bool AMOBAMMOGameMode::ToggleEquipFirstInventoryItem(AController* InstigatorController)
@@ -2032,6 +2141,225 @@ bool AMOBAMMOGameMode::HandleSpendSkillPoint(AController* Controller, int32 Abil
         PS->GetSkillPoints()
     ));
 
+    return true;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Zone System
+// ─────────────────────────────────────────────────────────────────────────────
+
+void AMOBAMMOGameMode::CollectSpawnPoints()
+{
+    RegisteredSpawnPoints.Empty();
+
+    for (TActorIterator<AMOBAMMOSpawnPoint> It(GetWorld()); It; ++It)
+    {
+        if (IsValid(*It) && !It->bDisabled)
+        {
+            RegisteredSpawnPoints.Add(*It);
+        }
+    }
+
+    // Sort ascending by Priority so FindBestSpawnPointForZone always picks
+    // the lowest-priority-number (most preferred) first.
+    RegisteredSpawnPoints.Sort([](const AMOBAMMOSpawnPoint& A, const AMOBAMMOSpawnPoint& B)
+    {
+        return A.Priority < B.Priority;
+    });
+
+    UE_LOG(LogTemp, Log, TEXT("[ZoneSystem] Collected %d spawn point(s)."),
+        RegisteredSpawnPoints.Num());
+}
+
+void AMOBAMMOGameMode::HandlePlayerEnteredZone(AController* Controller,
+                                               const FMOBAMMOZoneInfo& ZoneInfo)
+{
+    if (!Controller || !ZoneInfo.IsValid())
+    {
+        return;
+    }
+
+    AMOBAMMOPlayerState* PS = ResolveMOBAPlayerState(Controller);
+    if (!PS)
+    {
+        return;
+    }
+
+    // Skip redundant enter events (e.g. overlapping two volumes of the same zone).
+    if (PS->GetCurrentZoneId() == ZoneInfo.ZoneId)
+    {
+        return;
+    }
+
+    PS->SetCurrentZoneId(ZoneInfo.ZoneId);
+
+    const FString ZoneName = ZoneInfo.DisplayName.IsEmpty()
+        ? ZoneInfo.ZoneId.ToString()
+        : ZoneInfo.DisplayName.ToString();
+
+    PushCombatLog(FString::Printf(
+        TEXT("[Zone] %s entered %s."),
+        *PS->GetPlayerName(),
+        *ZoneName
+    ));
+
+    UE_LOG(LogTemp, Log, TEXT("[ZoneSystem] %s entered zone '%s'."),
+        *PS->GetPlayerName(), *ZoneInfo.ZoneId.ToString());
+}
+
+void AMOBAMMOGameMode::HandlePlayerExitedZone(AController* Controller, FName ZoneId)
+{
+    if (!Controller)
+    {
+        return;
+    }
+
+    AMOBAMMOPlayerState* PS = ResolveMOBAPlayerState(Controller);
+    if (!PS)
+    {
+        return;
+    }
+
+    // Only clear if we're actually leaving the zone we think we're in.
+    if (PS->GetCurrentZoneId() != ZoneId)
+    {
+        return;
+    }
+
+    PS->SetCurrentZoneId(NAME_None);
+
+    UE_LOG(LogTemp, Log, TEXT("[ZoneSystem] %s exited zone '%s'."),
+        *PS->GetPlayerName(), *ZoneId.ToString());
+}
+
+AActor* AMOBAMMOGameMode::FindBestSpawnPointForZone(FName ZoneId) const
+{
+    // First pass: exact zone match.
+    for (AMOBAMMOSpawnPoint* SP : RegisteredSpawnPoints)
+    {
+        if (IsValid(SP) && !SP->bDisabled && SP->ZoneId == ZoneId)
+        {
+            return SP;
+        }
+    }
+
+    // Second pass: global fallback (ZoneId == NAME_None).
+    for (AMOBAMMOSpawnPoint* SP : RegisteredSpawnPoints)
+    {
+        if (IsValid(SP) && !SP->bDisabled && SP->ZoneId == NAME_None)
+        {
+            return SP;
+        }
+    }
+
+    return nullptr;
+}
+
+FName AMOBAMMOGameMode::GetControllerCurrentZone(const AController* Controller) const
+{
+    if (!Controller)
+    {
+        return NAME_None;
+    }
+    if (const AMOBAMMOPlayerState* PS = Controller->GetPlayerState<AMOBAMMOPlayerState>())
+    {
+        return PS->GetCurrentZoneId();
+    }
+    return NAME_None;
+}
+
+AActor* AMOBAMMOGameMode::ChoosePlayerStart_Implementation(AController* Player)
+{
+    // Try to find a spawn point matching the player's current zone.
+    const FName ZoneId = GetControllerCurrentZone(Player);
+    if (AActor* ZoneSpawn = FindBestSpawnPointForZone(ZoneId))
+    {
+        return ZoneSpawn;
+    }
+
+    // No custom spawn points registered — fall back to engine default
+    // (PlayerStart actors in the level).
+    return Super::ChoosePlayerStart_Implementation(Player);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Faction Helpers
+// ─────────────────────────────────────────────────────────────────────────────
+
+EMOBAMMOFaction AMOBAMMOGameMode::GetActorFaction(const AActor* Actor) const
+{
+    if (!Actor)
+    {
+        return EMOBAMMOFaction::Neutral;
+    }
+
+    // Player characters: read from PlayerState (replicated).
+    if (const ACharacter* Character = Cast<ACharacter>(Actor))
+    {
+        if (const AController* Ctrl = Character->GetController())
+        {
+            if (const AMOBAMMOPlayerState* PS = Ctrl->GetPlayerState<AMOBAMMOPlayerState>())
+            {
+                return PS->GetFaction();
+            }
+        }
+    }
+
+    // AI enemies: faction stored directly on the character.
+    if (const AMOBAMMOAICharacter* AIChar = Cast<AMOBAMMOAICharacter>(Actor))
+    {
+        return AIChar->Faction;
+    }
+
+    // Fallback — training dummies, props, loot actors, etc.
+    return EMOBAMMOFaction::Neutral;
+}
+
+bool AMOBAMMOGameMode::AreActorsHostile(const AActor* ActorA, const AActor* ActorB) const
+{
+    return AreFactionsHostile(GetActorFaction(ActorA), GetActorFaction(ActorB));
+}
+
+bool AMOBAMMOGameMode::IsValidDamageTarget(const AController* InstigatorController,
+                                           const AActor* Target) const
+{
+    if (!InstigatorController || !Target)
+    {
+        return false;
+    }
+    const APawn* InstigatorPawn = InstigatorController->GetPawn();
+    return AreActorsHostile(InstigatorPawn, Target);
+}
+
+void AMOBAMMOGameMode::NotifyEnemyKilled(AController* KillerController, int32 XP, int32 Gold,
+                                         const FString& EnemyName, EMOBAMMOQuestType QuestType)
+{
+    if (!KillerController)
+    {
+        return;
+    }
+
+    GrantKillReward(KillerController, XP, Gold, EnemyName);
+    NotifyQuestEvent(KillerController, QuestType, 1);
+}
+
+bool AMOBAMMOGameMode::GrantLootPickup(AController* PlayerController, const FString& ItemId,
+                                       int32 Quantity, const FString& SourceName)
+{
+    AMOBAMMOPlayerState* PS = ResolveMOBAPlayerState(PlayerController);
+    if (!PS || ItemId.IsEmpty() || Quantity <= 0)
+    {
+        return false;
+    }
+
+    PS->GrantItem(ItemId, Quantity);
+
+    const FString Label = SourceName.IsEmpty() ? ItemId : SourceName;
+    PushCombatLog(FString::Printf(TEXT("[LOOT] %s picked up %dx %s."),
+        *PS->GetPlayerName(), Quantity, *Label));
+
+    // Persist immediately so the item survives a disconnect.
+    SavePlayerProgress(PlayerController);
     return true;
 }
 

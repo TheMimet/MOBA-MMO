@@ -220,13 +220,15 @@ void UMOBAMMOLoginScreenWidget::PushStateToWebUI()
 
 	// Build JSON state to push via CustomEvent
 	FString StateJson = FString::Printf(
-		TEXT("{\"backendBaseUrl\":\"%s\",\"loginStatus\":\"%s\",\"characterListStatus\":\"%s\",\"sessionStatus\":\"%s\",\"lastError\":\"%s\",\"lastUsername\":\"%s\",\"defaultUsername\":\"%s\"}"),
+		TEXT("{\"backendBaseUrl\":\"%s\",\"loginStatus\":\"%s\",\"characterListStatus\":\"%s\",\"sessionStatus\":\"%s\",\"lastError\":\"%s\",\"lastUsername\":\"%s\",\"accountRole\":\"%s\",\"opsAccessToken\":\"%s\",\"defaultUsername\":\"%s\"}"),
 		*BackendSubsystem->GetBackendBaseUrl().Replace(TEXT("\""), TEXT("\\\"")),
 		*BackendSubsystem->GetLoginStatus(),
 		*BackendSubsystem->GetCharacterListStatus(),
 		*BackendSubsystem->GetSessionStatus(),
 		*BackendSubsystem->GetLastErrorMessage().Replace(TEXT("\""), TEXT("\\\"")).Replace(TEXT("\n"), TEXT(" ")),
 		*BackendSubsystem->GetLastUsername(),
+		*BackendSubsystem->GetLastAccountRole(),
+		*BackendSubsystem->GetAdminOpsAccessToken(),
 		*DefaultUsername
 	);
 
@@ -311,7 +313,9 @@ void UMOBAMMOLoginScreenWidget::HandleConsoleMessage(const FString& Message, con
 	if (ActionType == TEXT("mockLogin"))
 	{
 		bool bArmed = false;
+		bool bRememberMe = false;
 		JsonObject->TryGetBoolField(TEXT("armed"), bArmed);
+		JsonObject->TryGetBoolField(TEXT("rememberMe"), bRememberMe);
 		if (!bArmed)
 		{
 			UE_LOG(LogTemp, Warning, TEXT("[LoginWidget] Ignored unarmed mockLogin action."));
@@ -319,20 +323,51 @@ void UMOBAMMOLoginScreenWidget::HandleConsoleMessage(const FString& Message, con
 		}
 
 		FString Username;
+		FString Password;
+		JsonObject->TryGetStringField(TEXT("password"), Password);
 		if (JsonObject->TryGetStringField(TEXT("username"), Username) && !Username.IsEmpty())
 		{
-			BackendSubsystem->LoginFromWebUI(Username);
+			BackendSubsystem->LoginFromWebUI(Username, Password, bRememberMe);
 		}
 		else
 		{
-			BackendSubsystem->LoginFromWebUI(DefaultUsername);
+			BackendSubsystem->LoginFromWebUI(DefaultUsername, FString(), bRememberMe);
 		}
+	}
+	else if (ActionType == TEXT("login") || ActionType == TEXT("authLogin"))
+	{
+		FString Username;
+		FString Password;
+		bool bRememberMe = false;
+		JsonObject->TryGetStringField(TEXT("username"), Username);
+		JsonObject->TryGetStringField(TEXT("password"), Password);
+		JsonObject->TryGetBoolField(TEXT("rememberMe"), bRememberMe);
+		BackendSubsystem->LoginFromWebUI(Username.IsEmpty() ? DefaultUsername : Username, Password, bRememberMe);
+	}
+	else if (ActionType == TEXT("register") || ActionType == TEXT("createAccount"))
+	{
+		FString Username;
+		FString Password;
+		bool bRememberMe = false;
+		JsonObject->TryGetStringField(TEXT("username"), Username);
+		JsonObject->TryGetStringField(TEXT("password"), Password);
+		JsonObject->TryGetBoolField(TEXT("rememberMe"), bRememberMe);
+		BackendSubsystem->RegisterFromWebUI(Username.IsEmpty() ? DefaultUsername : Username, Password, bRememberMe);
+	}
+	else if (ActionType == TEXT("refreshAuth"))
+	{
+		BackendSubsystem->RefreshAuthSession();
+	}
+	else if (ActionType == TEXT("logout"))
+	{
+		BackendSubsystem->LogoutFromWebUI();
 	}
 	else if (ActionType == TEXT("ready"))
 	{
 		bPageLoaded = true;
 		PushStateToWebUI();
 		UpdateNativeFallback();
+		BackendSubsystem->TryRestoreRememberedAuthSession();
 	}
 }
 

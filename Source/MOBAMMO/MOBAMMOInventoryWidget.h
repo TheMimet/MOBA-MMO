@@ -35,6 +35,7 @@ protected:
     virtual void NativeConstruct() override;
     virtual void NativeOnInitialized() override;
     virtual void NativeTick(const FGeometry& MyGeometry, float InDeltaTime) override;
+    virtual FReply NativeOnMouseButtonDown(const FGeometry& InGeometry, const FPointerEvent& InMouseEvent) override;
 
 private:
     // Layout
@@ -49,6 +50,8 @@ private:
     UBorder* CreateItemSlot(int32 SlotIndex);
     void PopulateSlot(UBorder* SlotBorder, const FMOBAMMOInventoryItem& Item);
     void ClearSlot(UBorder* SlotBorder, int32 SlotIndex);
+    bool TryResolveSlotUnderCursor(const FVector2D& ScreenPosition, int32& OutSlotIndex) const;
+    void UseVisibleInventorySlot(int32 SlotIndex);
 
     // Tooltip
     void ShowTooltip(const FMOBAMMOInventoryItem& Item, const FGeometry& SlotGeometry);

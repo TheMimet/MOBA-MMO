@@ -3,6 +3,11 @@ $ErrorActionPreference = "Stop"
 $projectRoot = Split-Path -Parent $PSScriptRoot
 $stageRoot = Join-Path $projectRoot "Saved\StagedBuilds\WindowsServer\WindowsServer"
 $serverExe = Join-Path $stageRoot "MOBAMMO\Binaries\Win64\MOBAMMOServer.exe"
+$devServerExe = Join-Path $projectRoot "Binaries\Win64\MOBAMMOServer.exe"
+
+if (-not (Test-Path $serverExe) -and (Test-Path $devServerExe)) {
+  $serverExe = $devServerExe
+}
 $defaultMap = "/Game/ThirdPerson/Lvl_ThirdPerson?game=/Script/MOBAMMO.MOBAMMOGameMode"
 $backendEnvPath = Join-Path $projectRoot "server\.env"
 

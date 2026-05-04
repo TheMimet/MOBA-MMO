@@ -11,6 +11,7 @@ enum class EMOBAMMOQuestType : uint8
 {
     KillTrainingDummy   UMETA(DisplayName="Kill Training Dummy"),
     KillTrainingMinion  UMETA(DisplayName="Kill Training Minion"),
+    KillMob             UMETA(DisplayName="Kill Mob"),
     DealDamage          UMETA(DisplayName="Deal Damage"),
     BuyFromVendor       UMETA(DisplayName="Buy From Vendor"),
     UseAbility          UMETA(DisplayName="Use Ability"),

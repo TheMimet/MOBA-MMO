@@ -116,9 +116,27 @@ export const registerSessionRoutes: FastifyPluginAsync = async (app) => {
         ]);
       }
 
-      recordPersistenceEvent("sessionStarted");
+      recordPersistenceEvent("sessionStarted", {
+        characterId: character.id,
+        sessionId,
+        statusCode: 200,
+        message: "Session started.",
+        metadata: {
+          previousSessionId: previousSession?.id ?? null,
+          previousSessionStatus: previousSession?.status ?? null,
+        },
+      });
       if (previousSessionTimedOut) {
-        recordPersistenceEvent("reconnectAttempted");
+        recordPersistenceEvent("reconnectAttempted", {
+          characterId: character.id,
+          sessionId,
+          statusCode: 200,
+          message: "New session started after previous session timed out.",
+          metadata: {
+            previousSessionId: previousSession.id,
+            previousLastSeenAt: previousSession.updatedAt.toISOString(),
+          },
+        });
       }
 
       return {
@@ -199,7 +217,13 @@ export const registerSessionRoutes: FastifyPluginAsync = async (app) => {
     const sessionId = request.body?.sessionId?.trim();
 
     if (!characterId || !sessionId) {
-      recordPersistenceEvent("rejected");
+      recordPersistenceEvent("rejected", {
+        characterId: characterId ?? null,
+        sessionId: sessionId ?? null,
+        statusCode: 400,
+        errorCode: "session_identity_required",
+        message: "Heartbeat rejected because characterId or sessionId is missing.",
+      });
       return reply.code(400).send({
         error: "session_identity_required",
         message: "Heartbeat icin characterId ve sessionId gereklidir.",
@@ -217,7 +241,13 @@ export const registerSessionRoutes: FastifyPluginAsync = async (app) => {
       });
 
       if (!character) {
-        recordPersistenceEvent("rejected");
+        recordPersistenceEvent("rejected", {
+          characterId,
+          sessionId,
+          statusCode: 404,
+          errorCode: "character_not_found",
+          message: "Heartbeat rejected because character was not found.",
+        });
         return reply.code(404).send({
           error: "character_not_found",
           message: "Heartbeat icin gecerli bir karakter gereklidir.",
@@ -229,7 +259,16 @@ export const registerSessionRoutes: FastifyPluginAsync = async (app) => {
       }
 
       if (character.activeSession?.id === sessionId && character.activeSession.status === SESSION_STATUS.TIMED_OUT) {
-        recordPersistenceEvent("rejected");
+        recordPersistenceEvent("rejected", {
+          characterId: character.id,
+          sessionId,
+          statusCode: 409,
+          errorCode: PERSISTENCE_ERROR.SESSION_EXPIRED,
+          message: "Heartbeat rejected because session is already timed out.",
+          metadata: {
+            sessionLastSeenAt: character.activeSession.updatedAt.toISOString(),
+          },
+        });
         return reply.code(409).send({
           characterId: character.id,
           currentSessionId: character.activeSession.id,
@@ -246,7 +285,17 @@ export const registerSessionRoutes: FastifyPluginAsync = async (app) => {
         character.activeSession.id !== sessionId ||
         character.activeSession.status !== SESSION_STATUS.ACTIVE
       ) {
-        recordPersistenceEvent("rejected");
+        recordPersistenceEvent("rejected", {
+          characterId: character.id,
+          sessionId,
+          statusCode: 409,
+          errorCode: PERSISTENCE_ERROR.STALE_OR_INVALID_SESSION,
+          message: "Heartbeat rejected because session is stale or invalid.",
+          metadata: {
+            currentSessionId: character.activeSession?.id ?? null,
+            currentSessionStatus: character.activeSession?.status ?? null,
+          },
+        });
         return reply.code(409).send({
           characterId: character.id,
           currentSessionId: character.activeSession?.id ?? null,
@@ -267,7 +316,17 @@ export const registerSessionRoutes: FastifyPluginAsync = async (app) => {
           },
         });
 
-        recordPersistenceEvent("timedOut");
+        recordPersistenceEvent("timedOut", {
+          characterId: character.id,
+          sessionId,
+          statusCode: 409,
+          errorCode: PERSISTENCE_ERROR.SESSION_EXPIRED,
+          message: "Heartbeat timed out the active session.",
+          metadata: {
+            sessionLastSeenAt: character.activeSession.updatedAt.toISOString(),
+            sessionTimeoutSeconds: app.appConfig.sessionTimeoutSeconds,
+          },
+        });
         return reply.code(409).send({
           characterId: character.id,
           currentSessionId: character.activeSession.id,
@@ -288,7 +347,12 @@ export const registerSessionRoutes: FastifyPluginAsync = async (app) => {
         },
       });
 
-      recordPersistenceEvent("heartbeatAccepted");
+      recordPersistenceEvent("heartbeatAccepted", {
+        characterId: character.id,
+        sessionId,
+        statusCode: 202,
+        message: "Heartbeat accepted.",
+      });
       return reply.code(202).send({
         characterId: character.id,
         sessionId,

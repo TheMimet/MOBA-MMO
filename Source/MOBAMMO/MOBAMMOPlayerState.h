@@ -2,6 +2,7 @@
 
 #include "CoreMinimal.h"
 #include "GameFramework/PlayerState.h"
+#include "MOBAMMOFactionTypes.h"
 #include "MOBAMMOInventoryTypes.h"
 #include "MOBAMMOQuestTypes.h"
 #include "MOBAMMOStatusTypes.h"
@@ -345,6 +346,26 @@ public:
     void TickAndApplyStatusEffects(float DeltaTime, float& OutHealApplied, float& OutDamageApplied,
                                    TArray<EMOBAMMOStatusEffectType>& OutExpiredTypes);
 
+    // ── Zone tracking ─────────────────────────────────────────────
+    // Which named zone the player is currently inside.  NAME_None = no zone /
+    // default area.  Replicated so the HUD can show a zone label.
+    UFUNCTION(BlueprintPure, Category="MOBAMMO|Zone")
+    FName GetCurrentZoneId() const { return CurrentZoneId; }
+
+    // Server-only.  Called by GameMode when a ZoneVolume overlap fires.
+    UFUNCTION(BlueprintCallable, Category="MOBAMMO|Zone")
+    void SetCurrentZoneId(FName NewZoneId);
+
+    // ── Faction ───────────────────────────────────────────────────
+    // Replicated to all clients so HUD and targeting can colour-code allies vs
+    // enemies.  Default Allied — set to Hostile for adversarial game modes.
+    UFUNCTION(BlueprintPure, Category="MOBAMMO|Faction")
+    EMOBAMMOFaction GetFaction() const { return Faction; }
+
+    // Server-only.  Call from GameMode when a player changes side.
+    UFUNCTION(BlueprintCallable, Category="MOBAMMO|Faction")
+    void SetFaction(EMOBAMMOFaction NewFaction);
+
     // ── Quest / Objective System ──────────────────────────────────
     // Server-only: assigns default session quests to this player.
     UFUNCTION(BlueprintCallable, Category="MOBAMMO|Quest")
@@ -360,6 +381,14 @@ public:
     virtual void GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const override;
 
 protected:
+    // Owner-only: zone label shown on local HUD (others don't need this).
+    UPROPERTY(ReplicatedUsing=OnRep_ZoneId, BlueprintReadOnly, Category="MOBAMMO|Zone")
+    FName CurrentZoneId = NAME_None;
+
+    // Visible to all clients (HUD colour-codes allies vs enemies).
+    UPROPERTY(ReplicatedUsing=OnRep_Faction, BlueprintReadOnly, Category="MOBAMMO|Faction")
+    EMOBAMMOFaction Faction = EMOBAMMOFaction::Allied;
+
     UPROPERTY(ReplicatedUsing=OnRep_InventoryArray, BlueprintReadOnly, Category="MOBAMMO|Replication")
     FMOBAMMOInventoryItemArray InventoryArray;
 
@@ -490,6 +519,12 @@ protected:
     TArray<int32> AbilityRanks;
 
 private:
+    UFUNCTION()
+    void OnRep_ZoneId();
+
+    UFUNCTION()
+    void OnRep_Faction();
+
     UFUNCTION()
     void OnRep_PlayerIdentity();
 

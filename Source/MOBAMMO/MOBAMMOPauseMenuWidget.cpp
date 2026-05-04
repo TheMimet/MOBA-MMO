@@ -453,6 +453,17 @@ void UMOBAMMOPauseMenuWidget::BuildActionButtons(UVerticalBox* Parent)
         SB->AddChild(Btn);
         BtnList->AddChildToVerticalBox(SB);
     }
+
+    // *  SKILLS
+    {
+        UButton* Btn = MakeMenuButton(TEXT("<>  SKILLS"), PauseColors::TextGold,
+            PauseColors::BtnDefault, 15);
+        Btn->OnClicked.AddDynamic(this, &UMOBAMMOPauseMenuWidget::HandleSkillsClicked);
+        USizeBox* SB = WidgetTree->ConstructWidget<USizeBox>(USizeBox::StaticClass());
+        SB->SetHeightOverride(50.0f);
+        SB->AddChild(Btn);
+        BtnList->AddChildToVerticalBox(SB);
+    }
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -554,6 +565,18 @@ void UMOBAMMOPauseMenuWidget::HandleInventoryClicked()
         if (UMOBAMMOGameUISubsystem* UISub = GI->GetSubsystem<UMOBAMMOGameUISubsystem>())
         {
             UISub->ToggleInventory();
+        }
+    }
+}
+
+void UMOBAMMOPauseMenuWidget::HandleSkillsClicked()
+{
+    HideMenu();
+    if (UGameInstance* GI = GetGameInstance())
+    {
+        if (UMOBAMMOGameUISubsystem* UISub = GI->GetSubsystem<UMOBAMMOGameUISubsystem>())
+        {
+            UISub->ToggleSkillPanel();
         }
     }
 }

@@ -1,0 +1,117 @@
+// schema.prisma
+// Bu dosya mevcut schema'nın üzerine inventory sistemi ekler.
+// Değişiklikler:
+//   - InventoryItem modeli detaylandırıldı
+//   - Character modeline inventory ilişkisi eklendi
+//   - Yeni migration: npx prisma migrate dev --name add_inventory
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ─────────────────────────────────────────
+// ACCOUNT
+// ─────────────────────────────────────────
+model Account {
+  id         String      @id @default(uuid())
+  username   String      @unique
+  password   String      // bcrypt hash (Phase 2'de doldurulacak)
+  createdAt  DateTime    @default(now())
+  characters Character[]
+}
+
+// ─────────────────────────────────────────
+// CHARACTER
+// ─────────────────────────────────────────
+model Character {
+  id        String          @id @default(uuid())
+  accountId String
+  account   Account         @relation(fields: [accountId], references: [id])
+  name      String
+  classId   String          @default("aurora")
+  level     Int             @default(1)
+
+  // Pozisyon — server'dan save edilir
+  posX      Float           @default(0)
+  posY      Float           @default(0)
+  posZ      Float           @default(0)
+  rotYaw    Float           @default(0)
+
+  createdAt DateTime        @default(now())
+  updatedAt DateTime        @updatedAt
+
+  stats     CharacterStats?
+  inventory InventoryItem[]
+  quests    QuestState[]
+
+  @@unique([accountId, name])
+}
+
+// ─────────────────────────────────────────
+// CHARACTER STATS
+// ─────────────────────────────────────────
+model CharacterStats {
+  id          String    @id @default(uuid())
+  characterId String    @unique
+  character   Character @relation(fields: [characterId], references: [id])
+
+  hp          Int       @default(100)
+  maxHp       Int       @default(100)
+  mana        Int       @default(50)
+  maxMana     Int       @default(50)
+  xp          Int       @default(0)
+  totalXp     Int       @default(0)
+
+  updatedAt   DateTime  @updatedAt
+}
+
+// ─────────────────────────────────────────
+// INVENTORY ITEM  ← ANA EKLEME
+// ─────────────────────────────────────────
+model InventoryItem {
+  id               String    @id @default(uuid())
+  characterId      String
+  character        Character @relation(fields: [characterId], references: [id])
+
+  // Hangi item türü (item kataloğundan)
+  itemDefinitionId String
+
+  // Miktar (stackable itemlar için)
+  quantity         Int       @default(1)
+
+  // Ekipman slotu: null = çantada, 0-5 = equip edilmiş
+  // 0=Weapon 1=Offhand 2=Head 3=Body 4=Boots 5=Accessory
+  equippedSlot     Int?
+
+  // Item'a özgü runtime değerleri (JSON — bonus stats, charges vs.)
+  metadata         Json?
+
+  acquiredAt       DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  @@index([characterId])
+  @@index([characterId, equippedSlot])
+}
+
+// ─────────────────────────────────────────
+// QUEST STATE
+// ─────────────────────────────────────────
+model QuestState {
+  id          String    @id @default(uuid())
+  characterId String
+  character   Character @relation(fields: [characterId], references: [id])
+
+  questId     String
+  status      String    @default("active") // active | completed | failed
+  progress    Json?     // { killCount: 3, targetCount: 10 } gibi
+
+  startedAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  @@unique([characterId, questId])
+}

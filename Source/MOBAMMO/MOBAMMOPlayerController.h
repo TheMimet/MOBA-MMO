@@ -28,11 +28,22 @@ public:
 	UFUNCTION(BlueprintCallable, Category="MOBAMMO|Vendor")
 	void RequestPurchaseFromVendor(const FString& ItemId);
 
+	/** Uses the specific inventory item requested by InventoryWidget. */
+	UFUNCTION(BlueprintCallable, Category="MOBAMMO|Inventory")
+	void RequestUseInventoryItem(const FString& ItemId);
+
 	/** Spend 1 skill point on the given ability slot (0-indexed). Called locally; routes via RPC. */
 	UFUNCTION(BlueprintCallable, Category="MOBAMMO|Skills")
 	void RequestSpendSkillPoint(int32 AbilitySlotIndex);
 
+protected:
+	virtual void SetupInputComponent() override;
+	virtual bool InputKey(const FInputKeyEventArgs& EventArgs) override;
+
 private:
+	void HandleEscapePressed();
+
+	void ApplyFrontendInputMode();
 	void ApplyGameplayInputMode();
 	void ApplyKeyboardMovementFallback();
 	void EnsureDefaultInputMapping();
@@ -77,6 +88,9 @@ private:
 
 	UFUNCTION(Server, Reliable)
 	void ServerUseInventoryConsumable();
+
+	UFUNCTION(Server, Reliable)
+	void ServerUseInventoryItem(const FString& ItemId);
 
 	UFUNCTION(Server, Reliable)
 	void ServerToggleInventoryEquipment();

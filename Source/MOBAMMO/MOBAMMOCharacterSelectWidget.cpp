@@ -249,13 +249,15 @@ void UMOBAMMOCharacterSelectWidget::PushStateToWebUI()
 	CharactersArrayJson += TEXT("]");
 
 	FString StateJson = FString::Printf(
-		TEXT("{\"loginStatus\":\"%s\",\"characterListStatus\":\"%s\",\"characterStatus\":\"%s\",\"sessionStatus\":\"%s\",\"lastError\":\"%s\",\"accountId\":\"%s\",\"selectedCharacterId\":\"%s\",\"characters\":%s}"),
+		TEXT("{\"loginStatus\":\"%s\",\"characterListStatus\":\"%s\",\"characterStatus\":\"%s\",\"sessionStatus\":\"%s\",\"lastError\":\"%s\",\"accountId\":\"%s\",\"accountRole\":\"%s\",\"opsAccessToken\":\"%s\",\"selectedCharacterId\":\"%s\",\"characters\":%s}"),
 		*BackendSubsystem->GetLoginStatus(),
 		*BackendSubsystem->GetCharacterListStatus(),
 		*BackendSubsystem->GetCharacterStatus(),
 		*BackendSubsystem->GetSessionStatus(),
 		*BackendSubsystem->GetLastErrorMessage().Replace(TEXT("\""), TEXT("\\\"")).Replace(TEXT("\n"), TEXT(" ")),
 		*BackendSubsystem->GetLastAccountId(),
+		*BackendSubsystem->GetLastAccountRole(),
+		*BackendSubsystem->GetAdminOpsAccessToken(),
 		*BackendSubsystem->GetSelectedCharacterId(),
 		*CharactersArrayJson
 	);

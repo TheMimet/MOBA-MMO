@@ -30,11 +30,80 @@ void AMOBAMMOPlayerController::AcknowledgePossession(APawn* P)
 	ApplyGameplayInputMode();
 }
 
+void AMOBAMMOPlayerController::SetupInputComponent()
+{
+	Super::SetupInputComponent();
+
+	if (InputComponent)
+	{
+		FInputKeyBinding& EscapeBinding = InputComponent->BindKey(EKeys::Escape, IE_Pressed, this, &AMOBAMMOPlayerController::HandleEscapePressed);
+		EscapeBinding.bExecuteWhenPaused = true;
+	}
+}
+
+bool AMOBAMMOPlayerController::InputKey(const FInputKeyEventArgs& EventArgs)
+{
+	if ((EventArgs.Key == EKeys::Escape || EventArgs.Key == EKeys::P || EventArgs.Key == EKeys::F10) && EventArgs.Event == IE_Pressed)
+	{
+		HandleEscapePressed();
+		return true;
+	}
+
+	return Super::InputKey(EventArgs);
+}
+
+void AMOBAMMOPlayerController::HandleEscapePressed()
+{
+	if (GEngine)
+	{
+		GEngine->AddOnScreenDebugMessage(-1, 5.0f, FColor::Red, TEXT("[DEBUG] Escape/P/F10 pressed! Handling UI Toggle..."));
+	}
+
+	if (UGameInstance* GameInstance = GetGameInstance())
+	{
+		if (UMOBAMMOGameUISubsystem* UISubsystem = GameInstance->GetSubsystem<UMOBAMMOGameUISubsystem>())
+		{
+			if (UISubsystem->IsChatOpen())
+			{
+				UISubsystem->CloseChat();
+			}
+			else if (UISubsystem->IsPauseMenuVisible())
+			{
+				UISubsystem->TogglePauseMenu();
+			}
+			else if (UISubsystem->IsSkillPanelOpen())
+			{
+				UISubsystem->CloseSkillPanel();
+			}
+			else if (UISubsystem->IsInventoryOpen())
+			{
+				UISubsystem->ToggleInventory();
+			}
+			else if (UISubsystem->IsVendorOpen())
+			{
+				UISubsystem->CloseVendor();
+			}
+			else
+			{
+				UISubsystem->TogglePauseMenu();
+			}
+		}
+	}
+}
+
+void AMOBAMMOPlayerController::ApplyFrontendInputMode()
+{
+	SetShowMouseCursor(true);
+	FInputModeGameAndUI InputMode;
+	InputMode.SetHideCursorDuringCapture(false);
+	SetInputMode(InputMode);
+}
+
 void AMOBAMMOPlayerController::ApplyGameplayInputMode()
 {
 	SetShowMouseCursor(true);
-	SetIgnoreMoveInput(false);
-	SetIgnoreLookInput(false);
+	ResetIgnoreMoveInput();
+	ResetIgnoreLookInput();
 	FInputModeGameOnly InputMode;
 	SetInputMode(InputMode);
 }
@@ -60,36 +129,75 @@ void AMOBAMMOPlayerController::PlayerTick(float DeltaTime)
 		UISubsystem = GameInstance->GetSubsystem<UMOBAMMOGameUISubsystem>();
 	}
 
+	if (UISubsystem && UISubsystem->IsFrontendFlowVisible())
+	{
+		ApplyFrontendInputMode();
+		return;
+	}
+
 	if (UISubsystem && UISubsystem->IsChatOpen())
 	{
-		if (WasInputKeyJustPressed(EKeys::Escape))
-		{
-			UISubsystem->CloseChat();
-		}
 		return;
 	}
 
 	if (UISubsystem && UISubsystem->IsPauseMenuVisible())
 	{
-		if (WasInputKeyJustPressed(EKeys::Escape))
+		return;
+	}
+
+	if (UISubsystem && UISubsystem->IsSkillPanelOpen())
+	{
+		if (WasInputKeyJustPressed(EKeys::K))
 		{
-			UISubsystem->TogglePauseMenu();
+			UISubsystem->CloseSkillPanel();
 		}
 		return;
 	}
 
-	ApplyKeyboardMovementFallback();
-
-	if (AMOBAMMOCharacter* MOBACharacter = Cast<AMOBAMMOCharacter>(GetPawn()))
+	if (UISubsystem && UISubsystem->IsInventoryOpen())
 	{
-		if (WasInputKeyJustPressed(EKeys::MouseScrollUp))
+		if (WasInputKeyJustPressed(EKeys::I))
 		{
-			MOBACharacter->AdjustCameraZoom(1.0f);
+			UISubsystem->ToggleInventory();
 		}
-		if (WasInputKeyJustPressed(EKeys::MouseScrollDown))
+		return;
+	}
+
+	if (UISubsystem && UISubsystem->IsVendorOpen())
+	{
+		if (WasInputKeyJustPressed(EKeys::V))
 		{
-			MOBACharacter->AdjustCameraZoom(-1.0f);
+			UISubsystem->CloseVendor();
 		}
+		return;
+	}
+
+	if (UISubsystem && UISubsystem->IsGameplayInputBlocked())
+	{
+		return;
+	}
+
+	if (WasInputKeyJustPressed(EKeys::Enter))
+	{
+		TriggerOpenChat();
+	}
+	if (WasInputKeyJustPressed(EKeys::I))
+	{
+		if (UISubsystem)
+		{
+			UISubsystem->ToggleInventory();
+		}
+	}
+	if (WasInputKeyJustPressed(EKeys::K))
+	{
+		if (UISubsystem)
+		{
+			UISubsystem->ToggleSkillPanel();
+		}
+	}
+	if (WasInputKeyJustPressed(EKeys::V))
+	{
+		TriggerToggleVendor();
 	}
 
 	if (WasInputKeyJustPressed(EKeys::One))
@@ -112,25 +220,6 @@ void AMOBAMMOPlayerController::PlayerTick(float DeltaTime)
 	{
 		TriggerDebugRespawn();
 	}
-	if (WasInputKeyJustPressed(EKeys::LeftMouseButton))
-	{
-		TriggerSelectLookTarget(false);
-	}
-	if (WasInputKeyJustPressed(EKeys::RightMouseButton))
-	{
-		TriggerPrimaryAttack();
-	}
-	if (WasInputKeyJustPressed(EKeys::E))
-	{
-		TriggerSelectLookTarget(true);
-	}
-	if (WasInputKeyJustPressed(EKeys::I))
-	{
-		if (UISubsystem)
-		{
-			UISubsystem->ToggleInventory();
-		}
-	}
 	if (WasInputKeyJustPressed(EKeys::Eight))
 	{
 		TriggerDebugGrantItem();
@@ -151,26 +240,13 @@ void AMOBAMMOPlayerController::PlayerTick(float DeltaTime)
 	{
 		TriggerClearDebugTarget();
 	}
-	if (WasInputKeyJustPressed(EKeys::Escape))
-	{
-		if (UISubsystem)
-		{
-			UISubsystem->TogglePauseMenu();
-		}
-	}
-	if (WasInputKeyJustPressed(EKeys::Enter))
-	{
-		TriggerOpenChat();
-	}
-	if (WasInputKeyJustPressed(EKeys::V))
-	{
-		TriggerToggleVendor();
-	}
+
 	// F1-F4: spend a skill point on abilities 1-4
 	if (WasInputKeyJustPressed(EKeys::F1)) { TriggerSpendSkillPoint(0); }
 	if (WasInputKeyJustPressed(EKeys::F2)) { TriggerSpendSkillPoint(1); }
 	if (WasInputKeyJustPressed(EKeys::F3)) { TriggerSpendSkillPoint(2); }
 	if (WasInputKeyJustPressed(EKeys::F4)) { TriggerSpendSkillPoint(3); }
+
 	if (WasInputKeyJustPressed(EKeys::R))
 	{
 		if (UGameInstance* GameInstance = GetGameInstance())
@@ -191,20 +267,45 @@ void AMOBAMMOPlayerController::PlayerTick(float DeltaTime)
 			}
 		}
 	}
+
+	if (!GetPawn())
+	{
+		return;
+	}
+
+	ApplyGameplayInputMode();
+	ApplyKeyboardMovementFallback();
+
+	if (AMOBAMMOCharacter* MOBACharacter = Cast<AMOBAMMOCharacter>(GetPawn()))
+	{
+		if (WasInputKeyJustPressed(EKeys::MouseScrollUp))
+		{
+			MOBACharacter->AdjustCameraZoom(1.0f);
+		}
+		if (WasInputKeyJustPressed(EKeys::MouseScrollDown))
+		{
+			MOBACharacter->AdjustCameraZoom(-1.0f);
+		}
+	}
+
+	if (WasInputKeyJustPressed(EKeys::LeftMouseButton))
+	{
+		TriggerSelectLookTarget(false);
+	}
+	if (WasInputKeyJustPressed(EKeys::RightMouseButton))
+	{
+		TriggerPrimaryAttack();
+	}
+	if (WasInputKeyJustPressed(EKeys::E))
+	{
+		TriggerSelectLookTarget(true);
+	}
 }
 
 void AMOBAMMOPlayerController::ApplyKeyboardMovementFallback()
 {
 	APawn* ControlledPawn = GetPawn();
 	if (!ControlledPawn || !ControlledPawn->GetPendingMovementInputVector().IsNearlyZero())
-	{
-		return;
-	}
-
-	const AMOBAMMOPlayerState* MOBAPlayerState = GetPlayerState<AMOBAMMOPlayerState>();
-	if (!MOBAPlayerState
-		|| MOBAPlayerState->GetSessionId().TrimStartAndEnd().IsEmpty()
-		|| MOBAPlayerState->GetCharacterId().TrimStartAndEnd().IsEmpty())
 	{
 		return;
 	}
@@ -325,6 +426,22 @@ void AMOBAMMOPlayerController::TriggerUseInventoryConsumable()
 	}
 
 	ServerUseInventoryConsumable();
+}
+
+void AMOBAMMOPlayerController::RequestUseInventoryItem(const FString& ItemId)
+{
+	if (ItemId.IsEmpty())
+	{
+		return;
+	}
+
+	if (HasAuthority())
+	{
+		ServerUseInventoryItem_Implementation(ItemId);
+		return;
+	}
+
+	ServerUseInventoryItem(ItemId);
 }
 
 void AMOBAMMOPlayerController::TriggerToggleInventoryEquipment()
@@ -557,6 +674,14 @@ void AMOBAMMOPlayerController::ServerUseInventoryConsumable_Implementation()
 	if (AMOBAMMOGameMode* MOBAGameMode = GetWorld() ? GetWorld()->GetAuthGameMode<AMOBAMMOGameMode>() : nullptr)
 	{
 		MOBAGameMode->UseFirstInventoryConsumable(this);
+	}
+}
+
+void AMOBAMMOPlayerController::ServerUseInventoryItem_Implementation(const FString& ItemId)
+{
+	if (AMOBAMMOGameMode* MOBAGameMode = GetWorld() ? GetWorld()->GetAuthGameMode<AMOBAMMOGameMode>() : nullptr)
+	{
+		MOBAGameMode->UseInventoryItem(this, ItemId);
 	}
 }
 

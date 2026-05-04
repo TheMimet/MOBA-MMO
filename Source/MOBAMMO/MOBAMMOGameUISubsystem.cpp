@@ -92,6 +92,22 @@ void UMOBAMMOGameUISubsystem::ToggleInventory()
     }
 }
 
+void UMOBAMMOGameUISubsystem::ToggleSkillPanel()
+{
+    if (HUDWidget)
+    {
+        HUDWidget->ToggleSkillPanel();
+    }
+}
+
+void UMOBAMMOGameUISubsystem::CloseSkillPanel()
+{
+    if (HUDWidget)
+    {
+        HUDWidget->CloseSkillPanel();
+    }
+}
+
 void UMOBAMMOGameUISubsystem::OpenChat()
 {
     if (HUDWidget)
@@ -111,6 +127,40 @@ void UMOBAMMOGameUISubsystem::CloseChat()
 bool UMOBAMMOGameUISubsystem::IsChatOpen() const
 {
     return HUDWidget && HUDWidget->IsChatOpen();
+}
+
+bool UMOBAMMOGameUISubsystem::IsInventoryOpen() const
+{
+    return HUDWidget && HUDWidget->IsInventoryOpen();
+}
+
+bool UMOBAMMOGameUISubsystem::IsSkillPanelOpen() const
+{
+    return HUDWidget && HUDWidget->IsSkillPanelOpen();
+}
+
+bool UMOBAMMOGameUISubsystem::IsGameplayInputBlocked() const
+{
+    return IsChatOpen()
+        || IsInventoryOpen()
+        || IsSkillPanelOpen()
+        || IsPauseMenuVisible()
+        || IsVendorOpen();
+}
+
+bool UMOBAMMOGameUISubsystem::IsFrontendFlowVisible() const
+{
+    auto IsWidgetActuallyVisible = [](const UUserWidget* Widget)
+    {
+        return Widget
+            && Widget->GetVisibility() != ESlateVisibility::Collapsed
+            && Widget->GetVisibility() != ESlateVisibility::Hidden;
+    };
+
+    return IsWidgetActuallyVisible(LoginWidget)
+        || IsWidgetActuallyVisible(LoadingWidget)
+        || IsWidgetActuallyVisible(MainMenuWidget)
+        || IsWidgetActuallyVisible(CharacterSelectWidget);
 }
 
 void UMOBAMMOGameUISubsystem::TogglePauseMenu()
@@ -456,17 +506,34 @@ void UMOBAMMOGameUISubsystem::UpdateWidgetVisibility(APlayerController* PlayerCo
     const bool bHUDVisible = IsWidgetActuallyVisible(HUDWidget);
     const bool bChatOpen = HUDWidget && HUDWidget->IsChatOpen();
     const bool bInventoryOpen = HUDWidget && HUDWidget->IsInventoryOpen();
+    const bool bSkillPanelOpen = HUDWidget && HUDWidget->IsSkillPanelOpen();
     const bool bPauseMenuVisible = PauseMenuWidget && PauseMenuWidget->IsMenuVisible();
     const bool bVendorOpen = IsVendorOpen();
 
-    const bool bNeedsMenuCursor = bLoginVisible || bLoadingVisible || bMainMenuVisible || bCharacterSelectVisible;
+    const bool bFrontendMenuOwnsInput = bLoginVisible || bLoadingVisible || bMainMenuVisible || bCharacterSelectVisible;
+    const bool bNeedsMenuCursor = bFrontendMenuOwnsInput;
     const bool bNeedsGameplayCursor = bPlayableClientPawnReady && bHUDVisible;
-    const bool bMenuOwnsInput = bLoginVisible || bLoadingVisible || bMainMenuVisible || bCharacterSelectVisible;
-    const bool bBlockingUIOwnsInput = bMenuOwnsInput || bChatOpen || bInventoryOpen || bPauseMenuVisible || bVendorOpen;
-    const bool bShouldShowCursor = bNeedsMenuCursor || bNeedsGameplayCursor || bChatOpen || bInventoryOpen || bPauseMenuVisible || bVendorOpen;
+    const bool bBlockingUIOwnsInput = bFrontendMenuOwnsInput || bChatOpen || bInventoryOpen || bSkillPanelOpen || bPauseMenuVisible || bVendorOpen;
+    const bool bShouldShowCursor = bNeedsMenuCursor || bNeedsGameplayCursor || bChatOpen || bInventoryOpen || bSkillPanelOpen || bPauseMenuVisible || bVendorOpen;
     PlayerController->SetShowMouseCursor(bShouldShowCursor);
-    PlayerController->SetIgnoreMoveInput(bBlockingUIOwnsInput);
-    PlayerController->SetIgnoreLookInput(bBlockingUIOwnsInput);
+    if (bBlockingUIOwnsInput)
+    {
+        if (!bInputBlockApplied)
+        {
+            PlayerController->SetIgnoreMoveInput(true);
+            PlayerController->SetIgnoreLookInput(true);
+            bInputBlockApplied = true;
+        }
+    }
+    else
+    {
+        // SetIgnoreMoveInput/SetIgnoreLookInput are stacked in Unreal. Menus can
+        // stay visible for many UI ticks, so always reset when gameplay retakes
+        // control instead of trying to pop a potentially deep stack one by one.
+        PlayerController->ResetIgnoreMoveInput();
+        PlayerController->ResetIgnoreLookInput();
+        bInputBlockApplied = false;
+    }
 
     if (bChatOpen)
     {

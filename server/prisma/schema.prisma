@@ -8,11 +8,76 @@ datasource db {
 }
 
 model Account {
-  id         String      @id @default(cuid())
-  username   String      @unique
-  createdAt  DateTime    @default(now())
-  updatedAt  DateTime    @updatedAt
-  characters Character[]
+  id            String             @id @default(cuid())
+  username      String             @unique
+  role          String             @default("player")
+  passwordHash  String?
+  failedLoginCount Int              @default(0)
+  lockedUntil   DateTime?
+  lastFailedLoginAt DateTime?
+  lastLoginAt   DateTime?
+  createdAt     DateTime           @default(now())
+  updatedAt     DateTime           @updatedAt
+  characters    Character[]
+  refreshTokens AuthRefreshToken[]
+  passwordResetTokens AuthPasswordResetToken[]
+  passwordResetDeliveries AuthPasswordResetDelivery[]
+}
+
+model AuthRefreshToken {
+  id        String    @id @default(cuid())
+  accountId String
+  tokenHash String    @unique
+  expiresAt DateTime
+  revokedAt DateTime?
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  account   Account   @relation(fields: [accountId], references: [id], onDelete: Cascade)
+
+  @@index([accountId])
+  @@index([expiresAt])
+  @@index([revokedAt])
+}
+
+model AuthPasswordResetToken {
+  id         String    @id @default(cuid())
+  accountId  String
+  tokenHash  String    @unique
+  expiresAt  DateTime
+  consumedAt DateTime?
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+  account    Account   @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  delivery   AuthPasswordResetDelivery?
+
+  @@index([accountId])
+  @@index([expiresAt])
+  @@index([consumedAt])
+}
+
+model AuthPasswordResetDelivery {
+  id                 String   @id @default(cuid())
+  accountId          String
+  resetTokenId       String   @unique
+  provider           String
+  status             String
+  attemptCount       Int      @default(0)
+  encryptedTokenJson String
+  lastStatusCode     Int?
+  lastError          String?
+  nextAttemptAt      DateTime?
+  deliveredAt        DateTime?
+  expiresAt          DateTime
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+  account            Account  @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  resetToken         AuthPasswordResetToken @relation(fields: [resetTokenId], references: [id], onDelete: Cascade)
+
+  @@index([accountId])
+  @@index([status])
+  @@index([nextAttemptAt])
+  @@index([expiresAt])
+  @@index([createdAt])
 }
 
 model Character {
@@ -106,4 +171,39 @@ model PersistenceTelemetry {
   sessionEnded       Int       @default(0)
   lastEventAt        DateTime?
   updatedAt          DateTime  @updatedAt
+}
+
+model PersistenceEvent {
+  id           String   @id @default(cuid())
+  eventType    String
+  characterId  String?
+  sessionId    String?
+  statusCode   Int?
+  errorCode    String?
+  message      String?
+  metadataJson String?
+  occurredAt   DateTime @default(now())
+
+  @@index([occurredAt])
+  @@index([eventType])
+  @@index([characterId])
+  @@index([sessionId])
+}
+
+model OpsAuditEvent {
+  id             String   @id @default(cuid())
+  action         String
+  actorType      String
+  actorAccountId String?
+  actorUsername  String?
+  status         String
+  target         String?
+  message        String?
+  metadataJson   String?
+  occurredAt     DateTime @default(now())
+
+  @@index([occurredAt])
+  @@index([action])
+  @@index([actorAccountId])
+  @@index([status])
 }

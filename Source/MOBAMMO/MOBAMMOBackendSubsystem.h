@@ -24,7 +24,13 @@ struct FBackendLoginResult
     FString Token;
 
     UPROPERTY(BlueprintReadOnly)
+    FString RefreshToken;
+
+    UPROPERTY(BlueprintReadOnly)
     FString Username;
+
+    UPROPERTY(BlueprintReadOnly)
+    FString Role;
 };
 
 USTRUCT(BlueprintType)
@@ -180,7 +186,11 @@ public:
     UFUNCTION(BlueprintCallable, Category="Backend")
     void MockLogin(const FString& Username);
 
-    void LoginFromWebUI(const FString& Username);
+    void LoginFromWebUI(const FString& Username, const FString& Password = FString(), bool bRememberMe = false);
+    void RegisterFromWebUI(const FString& Username, const FString& Password, bool bRememberMe = false);
+    void RefreshAuthSession();
+    void LogoutFromWebUI();
+    bool TryRestoreRememberedAuthSession();
 
     UFUNCTION(BlueprintCallable, Category="Backend")
     void ListCharacters(const FString& AccountId);
@@ -266,6 +276,12 @@ public:
     FString GetLastUsername() const { return LastUsername; }
 
     UFUNCTION(BlueprintPure, Category="Backend|Debug")
+    FString GetLastAccountRole() const { return LastAccountRole; }
+
+    UFUNCTION(BlueprintPure, Category="Backend|Debug")
+    FString GetAdminOpsAccessToken() const { return LastAccountRole == TEXT("admin") ? LastAuthToken : FString(); }
+
+    UFUNCTION(BlueprintPure, Category="Backend|Debug")
     bool IsWaitingForCharacterSelection() const { return bManualCharacterFlowPending && bCharacterSelectRequested; }
 
     UFUNCTION(BlueprintPure, Category="Backend|Debug")
@@ -276,10 +292,12 @@ private:
 
     FString LastAccountId;
     FString LastAuthToken;
+    FString LastRefreshToken;
     FString LastCharacterId;
     FString LastSessionConnectString;
     FString LastErrorMessage;
     FString LastUsername;
+    FString LastAccountRole;
     FString SelectedCharacterId;
     FBackendSessionResult LastSessionResult;
     TArray<FBackendCharacterResult> CachedCharacters;
@@ -295,6 +313,7 @@ private:
     bool bCharacterSelectRequested = false;
     bool bSaveConnectionHealthy = true;
     bool bReconnectTravelPending = false;
+    bool bPersistRefreshToken = false;
 
     TWeakObjectPtr<APlayerController> PendingReconnectPlayerController;
 
@@ -310,5 +329,12 @@ private:
     void NotifyDebugStateChanged();
     bool ShouldUseManualCharacterFlow() const;
     bool CanRunCharacterFlowAction(const FString& FailureMessage, FBackendRequestFailedSignature& FailureDelegate, FString& InOutStatus);
-    void RunLoginRequest(const FString& Username);
+    FString GetPersistedAuthSessionPath() const;
+    bool LoadPersistedAuthSession(FString& OutRefreshToken, FString& OutUsername, FString& OutAccountId) const;
+    void SavePersistedAuthSession(const FString& RefreshToken, const FString& Username, const FString& AccountId) const;
+    void ClearPersistedAuthSession() const;
+    void RunAuthRequest(const FString& RoutePath, const FString& Username, const FString& Password, bool bAllowPasswordlessLogin, bool bRememberMe);
+    void RunLoginRequest(const FString& Username, const FString& Password = FString(), bool bRememberMe = false);
+    void RunLogoutRequest();
+    void HandleAuthSessionResponse(const TSharedPtr<FJsonObject>& JsonObject, bool bRememberMe);
 };

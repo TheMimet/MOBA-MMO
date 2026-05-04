@@ -242,12 +242,14 @@ void UMOBAMMOMainMenuWidget::PushStateToWebUI()
     const bool bCanContinue = Characters.Num() > 0;
 
     const FString StateJson = FString::Printf(
-        TEXT("{\"loginStatus\":\"%s\",\"characterListStatus\":\"%s\",\"sessionStatus\":\"%s\",\"lastError\":\"%s\",\"lastUsername\":\"%s\",\"selectedCharacterId\":\"%s\",\"characters\":%s,\"canContinue\":%s,\"isBusy\":%s}"),
+        TEXT("{\"loginStatus\":\"%s\",\"characterListStatus\":\"%s\",\"sessionStatus\":\"%s\",\"lastError\":\"%s\",\"lastUsername\":\"%s\",\"accountRole\":\"%s\",\"opsAccessToken\":\"%s\",\"selectedCharacterId\":\"%s\",\"characters\":%s,\"canContinue\":%s,\"isBusy\":%s}"),
         *EscapeJson(BackendSubsystem->GetLoginStatus()),
         *EscapeJson(BackendSubsystem->GetCharacterListStatus()),
         *EscapeJson(SessionStatus),
         *EscapeJson(BackendSubsystem->GetLastErrorMessage()),
         *EscapeJson(BackendSubsystem->GetLastUsername()),
+        *EscapeJson(BackendSubsystem->GetLastAccountRole()),
+        *EscapeJson(BackendSubsystem->GetAdminOpsAccessToken()),
         *EscapeJson(BackendSubsystem->GetSelectedCharacterId()),
         *CharactersArrayJson,
         bCanContinue ? TEXT("true") : TEXT("false"),

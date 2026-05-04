@@ -26,6 +26,12 @@ public:
     void ToggleInventory();
 
     UFUNCTION(BlueprintCallable, Category="HUD")
+    void ToggleSkillPanel();
+
+    UFUNCTION(BlueprintCallable, Category="HUD")
+    void CloseSkillPanel();
+
+    UFUNCTION(BlueprintCallable, Category="HUD")
     void OpenChat();
 
     UFUNCTION(BlueprintCallable, Category="HUD")
@@ -33,6 +39,18 @@ public:
 
     UFUNCTION(BlueprintPure, Category="HUD")
     bool IsChatOpen() const;
+
+    UFUNCTION(BlueprintPure, Category="HUD")
+    bool IsInventoryOpen() const;
+
+    UFUNCTION(BlueprintPure, Category="HUD")
+    bool IsSkillPanelOpen() const;
+
+    UFUNCTION(BlueprintPure, Category="HUD")
+    bool IsGameplayInputBlocked() const;
+
+    UFUNCTION(BlueprintPure, Category="HUD")
+    bool IsFrontendFlowVisible() const;
 
     UFUNCTION(BlueprintCallable, Category="HUD")
     void TogglePauseMenu();
@@ -69,6 +87,7 @@ private:
     FTSTicker::FDelegateHandle TickHandle;
     bool bAutoSessionLoginRequested = false;
     bool bAutoSessionStartRequested = false;
+    bool bInputBlockApplied = false;
 
     UPROPERTY(Transient)
     TObjectPtr<UMOBAMMOLoginScreenWidget> LoginWidget;

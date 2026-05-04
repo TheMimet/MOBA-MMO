@@ -160,7 +160,7 @@ void AMOBAMMOCharacter::SetupPlayerInputComponent(UInputComponent* PlayerInputCo
 
 void AMOBAMMOCharacter::MoveForward(float Value)
 {
-    if (Controller && Value != 0.0f && CanProcessGameplayInput())
+    if (Controller && Value != 0.0f)
     {
         const FRotator Rotation = Controller->GetControlRotation();
         const FRotator YawRotation(0, Rotation.Yaw, 0);
@@ -172,7 +172,7 @@ void AMOBAMMOCharacter::MoveForward(float Value)
 
 void AMOBAMMOCharacter::MoveRight(float Value)
 {
-    if (Controller && Value != 0.0f && CanProcessGameplayInput())
+    if (Controller && Value != 0.0f)
     {
         const FRotator Rotation = Controller->GetControlRotation();
         const FRotator YawRotation(0, Rotation.Yaw, 0);

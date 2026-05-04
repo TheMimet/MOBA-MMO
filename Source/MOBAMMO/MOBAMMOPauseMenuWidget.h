@@ -53,6 +53,7 @@ private:
 
     UFUNCTION() void HandleResumeClicked();
     UFUNCTION() void HandleInventoryClicked();
+    UFUNCTION() void HandleSkillsClicked();
     UFUNCTION() void HandleDisconnectClicked();
     UFUNCTION() void HandleBackdropClicked();
 

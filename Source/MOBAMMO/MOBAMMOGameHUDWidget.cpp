@@ -1,7 +1,8 @@
-#include "MOBAMMOGameHUDWidget.h"
+﻿#include "MOBAMMOGameHUDWidget.h"
 
 #include "Blueprint/WidgetTree.h"
 #include "Components/Border.h"
+#include "Components/Button.h"
 #include "Components/CanvasPanel.h"
 #include "Components/CanvasPanelSlot.h"
 #include "Components/HorizontalBox.h"
@@ -70,6 +71,37 @@ namespace HUDColors
     static const FLinearColor TextDead       (0.960f, 0.320f, 0.360f, 1.0f);
 }
 
+namespace SkillPanelColors
+{
+    static const FLinearColor Backdrop      (0.006f, 0.008f, 0.012f, 0.90f);
+    static const FLinearColor PanelBg       (0.042f, 0.034f, 0.023f, 0.965f);
+    static const FLinearColor PanelDeep     (0.012f, 0.014f, 0.018f, 0.965f);
+    static const FLinearColor PanelSoft     (0.082f, 0.064f, 0.043f, 0.92f);
+    static const FLinearColor PanelAccent   (0.410f, 0.255f, 0.088f, 0.96f);
+    static const FLinearColor Gold          (0.980f, 0.680f, 0.220f, 1.00f);
+    static const FLinearColor GoldBright    (1.000f, 0.840f, 0.430f, 1.00f);
+    static const FLinearColor GoldDim       (0.560f, 0.365f, 0.135f, 0.95f);
+    static const FLinearColor Ember         (0.950f, 0.330f, 0.080f, 1.00f);
+    static const FLinearColor Blue          (0.180f, 0.590f, 0.960f, 1.00f);
+    static const FLinearColor Red           (0.760f, 0.120f, 0.100f, 1.00f);
+    static const FLinearColor TextPrimary   (0.980f, 0.925f, 0.760f, 1.00f);
+    static const FLinearColor TextSecondary (0.760f, 0.675f, 0.520f, 1.00f);
+    static const FLinearColor TextMuted     (0.430f, 0.395f, 0.330f, 1.00f);
+}
+
+static UTextBlock* MakeHUDText(UWidgetTree* Tree, const FString& Text, int32 Size, const FLinearColor& Color, bool bBold = false, ETextJustify::Type Justification = ETextJustify::Left)
+{
+    UTextBlock* Label = Tree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass());
+    Label->SetText(FText::FromString(Text));
+    Label->SetColorAndOpacity(FSlateColor(Color));
+    Label->SetJustification(Justification);
+    FSlateFontInfo Font = Label->GetFont();
+    Font.Size = Size;
+    Font.TypefaceFontName = bBold ? TEXT("Bold") : TEXT("Regular");
+    Label->SetFont(Font);
+    return Label;
+}
+
 // ─────────────────────────────────────────────────────────────
 // Lifecycle
 // ─────────────────────────────────────────────────────────────
@@ -104,13 +136,14 @@ void UMOBAMMOGameHUDWidget::NativeTick(const FGeometry& MyGeometry, float InDelt
         UpdateTexts();
         UpdateMinimap();
         UpdateQuestPanel();
+        RefreshSkillPanel();
     }
 }
 
 void UMOBAMMOGameHUDWidget::RefreshFromBackend()
 {
     UpdateTexts();
-    SetVisibility(ShouldBeVisible() ? ESlateVisibility::Visible : ESlateVisibility::Collapsed);
+    SetVisibility(ShouldBeVisible() ? ESlateVisibility::SelfHitTestInvisible : ESlateVisibility::Collapsed);
     EnsureAbilityBarVisible();
 }
 
@@ -220,6 +253,7 @@ void UMOBAMMOGameHUDWidget::BuildLayout()
     }
 
     RootCanvas = WidgetTree->ConstructWidget<UCanvasPanel>(UCanvasPanel::StaticClass());
+    RootCanvas->SetVisibility(ESlateVisibility::SelfHitTestInvisible);
     WidgetTree->RootWidget = RootCanvas;
 
     BuildPlayerFrame(RootCanvas);
@@ -244,6 +278,8 @@ void UMOBAMMOGameHUDWidget::BuildLayout()
             InvSlot->SetAutoSize(false);
         }
     }
+
+    BuildSkillPanel(RootCanvas);
 }
 
 void UMOBAMMOGameHUDWidget::ToggleInventory()
@@ -251,6 +287,28 @@ void UMOBAMMOGameHUDWidget::ToggleInventory()
     if (InventoryWidget)
     {
         InventoryWidget->ToggleVisibility();
+    }
+}
+
+void UMOBAMMOGameHUDWidget::ToggleSkillPanel()
+{
+    bSkillPanelOpen = !bSkillPanelOpen;
+    if (SkillPanelRoot)
+    {
+        SkillPanelRoot->SetVisibility(bSkillPanelOpen ? ESlateVisibility::Visible : ESlateVisibility::Collapsed);
+    }
+    if (bSkillPanelOpen)
+    {
+        RefreshSkillPanel();
+    }
+}
+
+void UMOBAMMOGameHUDWidget::CloseSkillPanel()
+{
+    bSkillPanelOpen = false;
+    if (SkillPanelRoot)
+    {
+        SkillPanelRoot->SetVisibility(ESlateVisibility::Collapsed);
     }
 }
 
@@ -264,201 +322,9 @@ bool UMOBAMMOGameHUDWidget::IsInventoryOpen() const
 
 void UMOBAMMOGameHUDWidget::BuildPlayerFrame(UCanvasPanel* Canvas)
 {
-    UBorder* FrameBg = MakeGlassPanel(HUDColors::PanelBg, 0.82f);
-    FrameBg->SetPadding(FMargin(16.0f, 10.0f, 16.0f, 12.0f));
-
-    UCanvasPanelSlot* FrameSlot = Canvas->AddChildToCanvas(FrameBg);
-    if (FrameSlot)
-    {
-        FrameSlot->SetAnchors(FAnchors(0.0f, 1.0f, 0.0f, 1.0f));      // bottom-left
-        FrameSlot->SetAlignment(FVector2D(0.0f, 1.0f));
-        FrameSlot->SetPosition(FVector2D(20.0f, -20.0f));
-        FrameSlot->SetSize(FVector2D(320.0f, 170.0f));
-        FrameSlot->SetAutoSize(false);
-    }
-
-    // Outer border glow
-    UBorder* BorderGlow = WidgetTree->ConstructWidget<UBorder>(UBorder::StaticClass());
-    BorderGlow->SetBrushColor(HUDColors::PanelBorder);
-    BorderGlow->SetPadding(FMargin(1.0f));
-    BorderGlow->SetContent(FrameBg);
-
-    // Actually replace child with the glow wrapper
-    if (FrameSlot)
-    {
-        FrameSlot->SetSize(FVector2D(322.0f, 172.0f));
-    }
-    Canvas->RemoveChild(FrameBg);
-    UCanvasPanelSlot* GlowSlot = Canvas->AddChildToCanvas(BorderGlow);
-    if (GlowSlot)
-    {
-        GlowSlot->SetAnchors(FAnchors(0.0f, 1.0f, 0.0f, 1.0f));
-        GlowSlot->SetAlignment(FVector2D(0.0f, 1.0f));
-        GlowSlot->SetPosition(FVector2D(20.0f, -20.0f));
-        GlowSlot->SetSize(FVector2D(322.0f, 172.0f));
-        GlowSlot->SetAutoSize(false);
-    }
-
-    UVerticalBox* Content = WidgetTree->ConstructWidget<UVerticalBox>(UVerticalBox::StaticClass());
-    FrameBg->SetContent(Content);
-
-    // Row 1: Name + life state
-    UHorizontalBox* NameRow = WidgetTree->ConstructWidget<UHorizontalBox>(UHorizontalBox::StaticClass());
-    Content->AddChildToVerticalBox(NameRow);
-
-    PlayerNameText = WidgetTree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass());
-    PlayerNameText->SetColorAndOpacity(FSlateColor(HUDColors::TextPrimary));
-    FSlateFontInfo NameFont = PlayerNameText->GetFont();
-    NameFont.Size = 16;
-    NameFont.TypefaceFontName = TEXT("Bold");
-    PlayerNameText->SetFont(NameFont);
-    if (UHorizontalBoxSlot* NameSlot = NameRow->AddChildToHorizontalBox(PlayerNameText))
-    {
-        NameSlot->SetSize(ESlateSizeRule::Fill);
-        NameSlot->SetVerticalAlignment(VAlign_Center);
-    }
-
-    PlayerLifeStateText = WidgetTree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass());
-    PlayerLifeStateText->SetColorAndOpacity(FSlateColor(HUDColors::TextAlive));
-    FSlateFontInfo LifeFont = PlayerLifeStateText->GetFont();
-    LifeFont.Size = 11;
-    LifeFont.TypefaceFontName = TEXT("Bold");
-    PlayerLifeStateText->SetFont(LifeFont);
-    if (UHorizontalBoxSlot* LifeSlot = NameRow->AddChildToHorizontalBox(PlayerLifeStateText))
-    {
-        LifeSlot->SetVerticalAlignment(VAlign_Center);
-        LifeSlot->SetPadding(FMargin(6.0f, 0.0f, 0.0f, 0.0f));
-    }
-
-    // Row 2: Class + Level (left) · Gold (right)
-    UHorizontalBox* ClassRow = WidgetTree->ConstructWidget<UHorizontalBox>(UHorizontalBox::StaticClass());
-    if (UVerticalBoxSlot* ClassRowSlot = Content->AddChildToVerticalBox(ClassRow))
-    {
-        ClassRowSlot->SetPadding(FMargin(0.0f, 2.0f, 0.0f, 8.0f));
-    }
-
-    PlayerClassLevelText = WidgetTree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass());
-    PlayerClassLevelText->SetColorAndOpacity(FSlateColor(HUDColors::TextSecondary));
-    FSlateFontInfo ClassFont = PlayerClassLevelText->GetFont();
-    ClassFont.Size = 11;
-    PlayerClassLevelText->SetFont(ClassFont);
-    if (UHorizontalBoxSlot* ClassTextSlot = ClassRow->AddChildToHorizontalBox(PlayerClassLevelText))
-    {
-        ClassTextSlot->SetSize(ESlateSizeRule::Fill);
-        ClassTextSlot->SetVerticalAlignment(VAlign_Center);
-    }
-
-    GoldText = WidgetTree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass());
-    GoldText->SetColorAndOpacity(FSlateColor(HUDColors::TextGold));
-    FSlateFontInfo GoldFont = GoldText->GetFont();
-    GoldFont.Size = 12;
-    GoldFont.TypefaceFontName = TEXT("Bold");
-    GoldText->SetFont(GoldFont);
-    GoldText->SetText(FText::FromString(TEXT("0 g")));
-    if (UHorizontalBoxSlot* GoldSlot = ClassRow->AddChildToHorizontalBox(GoldText))
-    {
-        GoldSlot->SetVerticalAlignment(VAlign_Center);
-        GoldSlot->SetHorizontalAlignment(HAlign_Right);
-        GoldSlot->SetPadding(FMargin(6.0f, 0.0f, 0.0f, 0.0f));
-    }
-
-    // Health bar with value overlay
-    {
-        UOverlay* HealthOverlay = WidgetTree->ConstructWidget<UOverlay>(UOverlay::StaticClass());
-        USizeBox* HealthSizeBox = WidgetTree->ConstructWidget<USizeBox>(USizeBox::StaticClass());
-        HealthSizeBox->SetHeightOverride(22.0f);
-        HealthSizeBox->AddChild(HealthOverlay);
-
-        HealthBar = MakeStyledBar(HUDColors::HealthFill, HUDColors::HealthBg, 22.0f);
-        HealthOverlay->AddChildToOverlay(HealthBar);
-
-        HealthValueText = WidgetTree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass());
-        HealthValueText->SetColorAndOpacity(FSlateColor(FLinearColor::White));
-        FSlateFontInfo HealthFont = HealthValueText->GetFont();
-        HealthFont.Size = 11;
-        HealthFont.TypefaceFontName = TEXT("Bold");
-        HealthValueText->SetFont(HealthFont);
-        if (UOverlaySlot* ValueSlot = HealthOverlay->AddChildToOverlay(HealthValueText))
-        {
-            ValueSlot->SetHorizontalAlignment(HAlign_Center);
-            ValueSlot->SetVerticalAlignment(VAlign_Center);
-        }
-
-        if (UVerticalBoxSlot* HealthSlot = Content->AddChildToVerticalBox(HealthSizeBox))
-        {
-            HealthSlot->SetPadding(FMargin(0.0f, 0.0f, 0.0f, 4.0f));
-        }
-    }
-
-    // Mana bar with value overlay
-    {
-        UOverlay* ManaOverlay = WidgetTree->ConstructWidget<UOverlay>(UOverlay::StaticClass());
-        USizeBox* ManaSizeBox = WidgetTree->ConstructWidget<USizeBox>(USizeBox::StaticClass());
-        ManaSizeBox->SetHeightOverride(18.0f);
-        ManaSizeBox->AddChild(ManaOverlay);
-
-        ManaBar = MakeStyledBar(HUDColors::ManaFill, HUDColors::ManaBg, 18.0f);
-        ManaOverlay->AddChildToOverlay(ManaBar);
-
-        ManaValueText = WidgetTree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass());
-        ManaValueText->SetColorAndOpacity(FSlateColor(FLinearColor::White));
-        FSlateFontInfo ManaFont = ManaValueText->GetFont();
-        ManaFont.Size = 10;
-        ManaFont.TypefaceFontName = TEXT("Bold");
-        ManaValueText->SetFont(ManaFont);
-        if (UOverlaySlot* ValueSlot = ManaOverlay->AddChildToOverlay(ManaValueText))
-        {
-            ValueSlot->SetHorizontalAlignment(HAlign_Center);
-            ValueSlot->SetVerticalAlignment(VAlign_Center);
-        }
-
-        Content->AddChildToVerticalBox(ManaSizeBox);
-    }
-
-    // XP bar with overlaid level / progress text
-    {
-        UOverlay* XPOverlay = WidgetTree->ConstructWidget<UOverlay>(UOverlay::StaticClass());
-        USizeBox* XPSizeBox = WidgetTree->ConstructWidget<USizeBox>(USizeBox::StaticClass());
-        XPSizeBox->SetHeightOverride(14.0f);
-        XPSizeBox->AddChild(XPOverlay);
-
-        XPBar = MakeStyledBar(HUDColors::XPFill, HUDColors::XPBg, 14.0f);
-        XPBar->SetPercent(0.0f);
-        XPOverlay->AddChildToOverlay(XPBar);
-
-        XPValueText = WidgetTree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass());
-        XPValueText->SetColorAndOpacity(FSlateColor(FLinearColor::White));
-        FSlateFontInfo XPFont = XPValueText->GetFont();
-        XPFont.Size = 9;
-        XPFont.TypefaceFontName = TEXT("Bold");
-        XPValueText->SetFont(XPFont);
-        if (UOverlaySlot* XPValueSlot = XPOverlay->AddChildToOverlay(XPValueText))
-        {
-            XPValueSlot->SetHorizontalAlignment(HAlign_Center);
-            XPValueSlot->SetVerticalAlignment(VAlign_Center);
-        }
-
-        if (UVerticalBoxSlot* XPSlotV = Content->AddChildToVerticalBox(XPSizeBox))
-        {
-            XPSlotV->SetPadding(FMargin(0.0f, 4.0f, 0.0f, 0.0f));
-        }
-    }
-
-    // Status effect row — small text line showing active buffs/debuffs.
-    StatusEffectText = WidgetTree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass());
-    StatusEffectText->SetColorAndOpacity(FSlateColor(FLinearColor(0.80f, 0.80f, 0.80f, 1.0f)));
-    {
-        FSlateFontInfo StatusFont = StatusEffectText->GetFont();
-        StatusFont.Size = 10;
-        StatusFont.TypefaceFontName = TEXT("Regular");
-        StatusEffectText->SetFont(StatusFont);
-    }
-    StatusEffectText->SetText(FText::GetEmpty());
-    StatusEffectText->SetVisibility(ESlateVisibility::Collapsed);
-    if (UVerticalBoxSlot* StatusSlot = Content->AddChildToVerticalBox(StatusEffectText))
-    {
-        StatusSlot->SetPadding(FMargin(0.0f, 4.0f, 0.0f, 0.0f));
-    }
+    // The player frame is now integrated into the bottom-center combat console
+    // built by BuildAbilityBar, matching the MMO-style reference layout.
+    (void)Canvas;
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -468,8 +334,8 @@ void UMOBAMMOGameHUDWidget::BuildAbilityBar(UCanvasPanel* Canvas)
 {
     const TArray<FMOBAMMOAbilityDefinition> Abilities = MOBAMMOAbilitySet::ForClass(TEXT(""));
 
-    AbilityBarBorder = MakeGlassPanel(HUDColors::PanelBg, 0.88f);
-    AbilityBarBorder->SetPadding(FMargin(10.0f, 8.0f));
+    AbilityBarBorder = MakeGlassPanel(FLinearColor(0.76f, 0.52f, 0.18f, 1.0f), 0.92f);
+    AbilityBarBorder->SetPadding(FMargin(1.0f));
     AbilityBarBorder->SetVisibility(ESlateVisibility::HitTestInvisible);
 
     UCanvasPanelSlot* BarSlot = Canvas->AddChildToCanvas(AbilityBarBorder);
@@ -477,13 +343,137 @@ void UMOBAMMOGameHUDWidget::BuildAbilityBar(UCanvasPanel* Canvas)
     {
         BarSlot->SetAnchors(FAnchors(0.5f, 1.0f, 0.5f, 1.0f));         // bottom-center
         BarSlot->SetAlignment(FVector2D(0.5f, 1.0f));
-        BarSlot->SetPosition(FVector2D(0.0f, -34.0f));
-        BarSlot->SetSize(FVector2D(560.0f, 92.0f));
+        BarSlot->SetPosition(FVector2D(0.0f, -18.0f));
+        BarSlot->SetSize(FVector2D(790.0f, 132.0f));
         BarSlot->SetAutoSize(false);
     }
 
+    UBorder* ConsoleBg = MakeGlassPanel(FLinearColor(0.006f, 0.007f, 0.010f, 1.0f), 0.94f);
+    ConsoleBg->SetPadding(FMargin(8.0f, 7.0f));
+    AbilityBarBorder->SetContent(ConsoleBg);
+
+    UHorizontalBox* ConsoleRow = WidgetTree->ConstructWidget<UHorizontalBox>(UHorizontalBox::StaticClass());
+    ConsoleBg->SetContent(ConsoleRow);
+
+    UBorder* LevelFrame = MakeGlassPanel(FLinearColor(0.88f, 0.61f, 0.22f, 1.0f), 0.84f);
+    LevelFrame->SetPadding(FMargin(2.0f));
+    USizeBox* LevelSize = WidgetTree->ConstructWidget<USizeBox>(USizeBox::StaticClass());
+    LevelSize->SetWidthOverride(98.0f);
+    LevelSize->SetHeightOverride(112.0f);
+    LevelSize->AddChild(LevelFrame);
+    if (UHorizontalBoxSlot* LevelSlot = ConsoleRow->AddChildToHorizontalBox(LevelSize))
+    {
+        LevelSlot->SetVerticalAlignment(VAlign_Center);
+        LevelSlot->SetPadding(FMargin(0.0f, 0.0f, 12.0f, 0.0f));
+    }
+
+    UBorder* LevelInner = MakeGlassPanel(FLinearColor(0.010f, 0.011f, 0.014f, 1.0f), 0.98f);
+    LevelInner->SetPadding(FMargin(8.0f, 6.0f));
+    LevelFrame->SetContent(LevelInner);
+
+    UVerticalBox* LevelContent = WidgetTree->ConstructWidget<UVerticalBox>(UVerticalBox::StaticClass());
+    LevelInner->SetContent(LevelContent);
+
+    PlayerClassLevelText = MakeHUDText(WidgetTree, TEXT("1"), 32, HUDColors::TextGold, true, ETextJustify::Center);
+    if (UVerticalBoxSlot* LevelNumberSlot = LevelContent->AddChildToVerticalBox(PlayerClassLevelText))
+    {
+        LevelNumberSlot->SetHorizontalAlignment(HAlign_Center);
+        LevelNumberSlot->SetPadding(FMargin(0.0f, 4.0f, 0.0f, 0.0f));
+    }
+
+    UTextBlock* LevelLabel = MakeHUDText(WidgetTree, TEXT("LEVEL"), 9, HUDColors::TextSecondary, true, ETextJustify::Center);
+    if (UVerticalBoxSlot* LevelLabelSlot = LevelContent->AddChildToVerticalBox(LevelLabel))
+    {
+        LevelLabelSlot->SetHorizontalAlignment(HAlign_Center);
+        LevelLabelSlot->SetPadding(FMargin(0.0f, -2.0f, 0.0f, 5.0f));
+    }
+
+    PlayerNameText = MakeHUDText(WidgetTree, TEXT("Hero"), 10, HUDColors::TextPrimary, true, ETextJustify::Center);
+    PlayerNameText->SetAutoWrapText(true);
+    if (UVerticalBoxSlot* NameSlot = LevelContent->AddChildToVerticalBox(PlayerNameText))
+    {
+        NameSlot->SetHorizontalAlignment(HAlign_Center);
+        NameSlot->SetSize(FSlateChildSize(ESlateSizeRule::Fill));
+    }
+
+    PlayerLifeStateText = MakeHUDText(WidgetTree, TEXT("ALIVE"), 8, HUDColors::TextAlive, true, ETextJustify::Center);
+    if (UVerticalBoxSlot* LifeSlot = LevelContent->AddChildToVerticalBox(PlayerLifeStateText))
+    {
+        LifeSlot->SetHorizontalAlignment(HAlign_Center);
+    }
+
+    UVerticalBox* MainStack = WidgetTree->ConstructWidget<UVerticalBox>(UVerticalBox::StaticClass());
+    if (UHorizontalBoxSlot* MainSlot = ConsoleRow->AddChildToHorizontalBox(MainStack))
+    {
+        MainSlot->SetSize(ESlateSizeRule::Fill);
+        MainSlot->SetVerticalAlignment(VAlign_Center);
+    }
+
+    UHorizontalBox* TopMetaRow = WidgetTree->ConstructWidget<UHorizontalBox>(UHorizontalBox::StaticClass());
+    if (UVerticalBoxSlot* TopMetaSlot = MainStack->AddChildToVerticalBox(TopMetaRow))
+    {
+        TopMetaSlot->SetPadding(FMargin(2.0f, 0.0f, 2.0f, 1.0f));
+    }
+
+    StatusEffectText = MakeHUDText(WidgetTree, TEXT(""), 9, HUDColors::TextSecondary, false, ETextJustify::Left);
+    StatusEffectText->SetVisibility(ESlateVisibility::Collapsed);
+    if (UHorizontalBoxSlot* StatusSlot = TopMetaRow->AddChildToHorizontalBox(StatusEffectText))
+    {
+        StatusSlot->SetSize(ESlateSizeRule::Fill);
+        StatusSlot->SetVerticalAlignment(VAlign_Center);
+    }
+
+    GoldText = MakeHUDText(WidgetTree, TEXT("0 g"), 10, HUDColors::TextGold, true, ETextJustify::Right);
+    GoldText->SetVisibility(ESlateVisibility::Collapsed);
+    if (UHorizontalBoxSlot* GoldSlot = TopMetaRow->AddChildToHorizontalBox(GoldText))
+    {
+        GoldSlot->SetVerticalAlignment(VAlign_Center);
+        GoldSlot->SetPadding(FMargin(8.0f, 0.0f, 0.0f, 0.0f));
+    }
+
+    UHorizontalBox* ResourceRow = WidgetTree->ConstructWidget<UHorizontalBox>(UHorizontalBox::StaticClass());
+    if (UVerticalBoxSlot* ResourceSlot = MainStack->AddChildToVerticalBox(ResourceRow))
+    {
+        ResourceSlot->SetPadding(FMargin(0.0f, 0.0f, 0.0f, 5.0f));
+    }
+
+    auto AddResourceBar = [this, ResourceRow](TObjectPtr<UProgressBar>& OutBar, TObjectPtr<UTextBlock>& OutValue, const FLinearColor& Fill, const FLinearColor& Bg, const FString& Label, float Width)
+    {
+        UBorder* Frame = MakeGlassPanel(FLinearColor(0.88f, 0.61f, 0.22f, 1.0f), 0.70f);
+        Frame->SetPadding(FMargin(1.0f));
+        USizeBox* Size = WidgetTree->ConstructWidget<USizeBox>(USizeBox::StaticClass());
+        Size->SetWidthOverride(Width);
+        Size->SetHeightOverride(18.0f);
+        Size->AddChild(Frame);
+        if (UHorizontalBoxSlot* Slot = ResourceRow->AddChildToHorizontalBox(Size))
+        {
+            Slot->SetPadding(FMargin(0.0f, 0.0f, 8.0f, 0.0f));
+        }
+
+        UOverlay* Overlay = WidgetTree->ConstructWidget<UOverlay>(UOverlay::StaticClass());
+        Frame->SetContent(Overlay);
+        OutBar = MakeStyledBar(Fill, Bg, 18.0f);
+        Overlay->AddChildToOverlay(OutBar);
+
+        OutValue = MakeHUDText(WidgetTree, Label, 9, FLinearColor::White, true, ETextJustify::Center);
+        OutValue->SetShadowColorAndOpacity(FLinearColor(0.0f, 0.0f, 0.0f, 0.85f));
+        OutValue->SetShadowOffset(FVector2D(1.0f, 1.0f));
+        if (UOverlaySlot* ValueSlot = Overlay->AddChildToOverlay(OutValue))
+        {
+            ValueSlot->SetHorizontalAlignment(HAlign_Center);
+            ValueSlot->SetVerticalAlignment(VAlign_Center);
+        }
+    };
+
+    AddResourceBar(HealthBar, HealthValueText, HUDColors::HealthFill, HUDColors::HealthBg, TEXT("0 / 0"), 306.0f);
+    AddResourceBar(ManaBar, ManaValueText, HUDColors::ManaFill, HUDColors::ManaBg, TEXT("0 / 0"), 306.0f);
+
     UHorizontalBox* AbilityRow = WidgetTree->ConstructWidget<UHorizontalBox>(UHorizontalBox::StaticClass());
-    AbilityBarBorder->SetContent(AbilityRow);
+    if (UVerticalBoxSlot* AbilityRowSlot = MainStack->AddChildToVerticalBox(AbilityRow))
+    {
+        AbilityRowSlot->SetHorizontalAlignment(HAlign_Center);
+        AbilityRowSlot->SetPadding(FMargin(0.0f, 0.0f, 0.0f, 5.0f));
+    }
 
     AbilitySlotBorders.Reset();
     AbilityKeyTexts.Reset();
@@ -495,70 +485,61 @@ void UMOBAMMOGameHUDWidget::BuildAbilityBar(UCanvasPanel* Canvas)
     {
         const FMOBAMMOAbilityDefinition& Def = Abilities[Index];
 
-        // Each ability is a bordered card
         UBorder* SlotBorder = WidgetTree->ConstructWidget<UBorder>(UBorder::StaticClass());
-        SlotBorder->SetBrushColor(HUDColors::PanelHighlight);
+        SlotBorder->SetBrushColor(FLinearColor(0.74f, 0.50f, 0.18f, 0.82f));
         SlotBorder->SetPadding(FMargin(1.0f));
 
-        UBorder* SlotBg = MakeGlassPanel(FLinearColor(0.030f, 0.035f, 0.060f), 0.92f);
-        SlotBg->SetPadding(FMargin(8.0f, 6.0f));
+        UBorder* SlotBg = MakeGlassPanel(FLinearColor(0.020f, 0.021f, 0.028f), 0.98f);
+        SlotBg->SetPadding(FMargin(4.0f, 3.0f));
         SlotBorder->SetContent(SlotBg);
 
         USizeBox* SlotSize = WidgetTree->ConstructWidget<USizeBox>(USizeBox::StaticClass());
-        SlotSize->SetWidthOverride(100.0f);
+        SlotSize->SetWidthOverride(68.0f);
+        SlotSize->SetHeightOverride(58.0f);
         SlotSize->AddChild(SlotBorder);
 
         if (UHorizontalBoxSlot* HSlot = AbilityRow->AddChildToHorizontalBox(SlotSize))
         {
-            HSlot->SetPadding(FMargin(Index > 0 ? 4.0f : 0.0f, 0.0f, 0.0f, 0.0f));
+            HSlot->SetPadding(FMargin(Index > 0 ? 6.0f : 0.0f, 0.0f, 0.0f, 0.0f));
         }
 
         UVerticalBox* SlotContent = WidgetTree->ConstructWidget<UVerticalBox>(UVerticalBox::StaticClass());
         SlotBg->SetContent(SlotContent);
 
-        // Key label (centered)
-        UTextBlock* KeyText = WidgetTree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass());
-        KeyText->SetColorAndOpacity(FSlateColor(HUDColors::TextGold));
-        FSlateFontInfo KeyFont = KeyText->GetFont();
-        KeyFont.Size = 14;
-        KeyFont.TypefaceFontName = TEXT("Bold");
-        KeyText->SetFont(KeyFont);
-        KeyText->SetText(FText::FromString(Def.KeyLabel));
-        KeyText->SetJustification(ETextJustify::Center);
-        SlotContent->AddChildToVerticalBox(KeyText);
-
-        // Ability name
-        UTextBlock* NameText = WidgetTree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass());
-        NameText->SetColorAndOpacity(FSlateColor(HUDColors::TextPrimary));
-        FSlateFontInfo AbilityNameFont = NameText->GetFont();
-        AbilityNameFont.Size = 9;
-        NameText->SetFont(AbilityNameFont);
-        NameText->SetText(FText::FromString(Def.Name));
-        NameText->SetJustification(ETextJustify::Center);
+        UTextBlock* NameText = MakeHUDText(WidgetTree, Def.Name, 7, HUDColors::TextPrimary, true, ETextJustify::Center);
+        NameText->SetAutoWrapText(true);
         if (UVerticalBoxSlot* NameSlot = SlotContent->AddChildToVerticalBox(NameText))
         {
-            NameSlot->SetPadding(FMargin(0.0f, 2.0f, 0.0f, 4.0f));
+            NameSlot->SetSize(FSlateChildSize(ESlateSizeRule::Fill));
+            NameSlot->SetVerticalAlignment(VAlign_Center);
         }
 
-        // Cooldown bar
-        UProgressBar* CdBar = MakeStyledBar(HUDColors::AbilityReady, HUDColors::AbilityBarBg, 6.0f);
+        UProgressBar* CdBar = MakeStyledBar(HUDColors::AbilityReady, HUDColors::AbilityBarBg, 4.0f);
         USizeBox* CdSizeBox = WidgetTree->ConstructWidget<USizeBox>(USizeBox::StaticClass());
-        CdSizeBox->SetHeightOverride(6.0f);
+        CdSizeBox->SetHeightOverride(4.0f);
         CdSizeBox->AddChild(CdBar);
         SlotContent->AddChildToVerticalBox(CdSizeBox);
 
-        // State label
-        UTextBlock* StateText = WidgetTree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass());
-        StateText->SetColorAndOpacity(FSlateColor(HUDColors::TextSuccess));
-        FSlateFontInfo StateFont = StateText->GetFont();
-        StateFont.Size = 8;
-        StateFont.TypefaceFontName = TEXT("Bold");
-        StateText->SetFont(StateFont);
-        StateText->SetText(FText::FromString(TEXT("READY")));
-        StateText->SetJustification(ETextJustify::Center);
-        if (UVerticalBoxSlot* StateSlot = SlotContent->AddChildToVerticalBox(StateText))
+        UHorizontalBox* BottomRow = WidgetTree->ConstructWidget<UHorizontalBox>(UHorizontalBox::StaticClass());
+        if (UVerticalBoxSlot* BottomSlot = SlotContent->AddChildToVerticalBox(BottomRow))
         {
-            StateSlot->SetPadding(FMargin(0.0f, 3.0f, 0.0f, 0.0f));
+            BottomSlot->SetPadding(FMargin(0.0f, 2.0f, 0.0f, 0.0f));
+        }
+
+        UTextBlock* KeyText = MakeHUDText(WidgetTree, Def.KeyLabel, 8, HUDColors::TextGold, true, ETextJustify::Center);
+        KeyText->SetText(FText::FromString(Def.KeyLabel));
+        if (UHorizontalBoxSlot* KeySlot = BottomRow->AddChildToHorizontalBox(KeyText))
+        {
+            KeySlot->SetVerticalAlignment(VAlign_Center);
+            KeySlot->SetPadding(FMargin(2.0f, 0.0f, 5.0f, 0.0f));
+        }
+
+        UTextBlock* StateText = MakeHUDText(WidgetTree, TEXT("READY"), 6, HUDColors::TextSuccess, true, ETextJustify::Right);
+        StateText->SetText(FText::FromString(TEXT("READY")));
+        if (UHorizontalBoxSlot* StateSlot = BottomRow->AddChildToHorizontalBox(StateText))
+        {
+            StateSlot->SetSize(ESlateSizeRule::Fill);
+            StateSlot->SetVerticalAlignment(VAlign_Center);
         }
 
         AbilitySlotBorders.Add(SlotBorder);
@@ -566,6 +547,40 @@ void UMOBAMMOGameHUDWidget::BuildAbilityBar(UCanvasPanel* Canvas)
         AbilityNameTexts.Add(NameText);
         AbilityStateTexts.Add(StateText);
         AbilityCooldownBars.Add(CdBar);
+    }
+
+    UHorizontalBox* XpRow = WidgetTree->ConstructWidget<UHorizontalBox>(UHorizontalBox::StaticClass());
+    if (UVerticalBoxSlot* XpRowSlot = MainStack->AddChildToVerticalBox(XpRow))
+    {
+        XpRowSlot->SetPadding(FMargin(0.0f, 0.0f, 8.0f, 0.0f));
+    }
+
+    UTextBlock* XpLabel = MakeHUDText(WidgetTree, TEXT("XP"), 8, HUDColors::TextGold, true, ETextJustify::Left);
+    if (UHorizontalBoxSlot* XpLabelSlot = XpRow->AddChildToHorizontalBox(XpLabel))
+    {
+        XpLabelSlot->SetVerticalAlignment(VAlign_Center);
+        XpLabelSlot->SetPadding(FMargin(2.0f, 0.0f, 6.0f, 0.0f));
+    }
+
+    UOverlay* XPOverlay = WidgetTree->ConstructWidget<UOverlay>(UOverlay::StaticClass());
+    USizeBox* XPSizeBox = WidgetTree->ConstructWidget<USizeBox>(USizeBox::StaticClass());
+    XPSizeBox->SetHeightOverride(9.0f);
+    XPSizeBox->AddChild(XPOverlay);
+    if (UHorizontalBoxSlot* XPSlot = XpRow->AddChildToHorizontalBox(XPSizeBox))
+    {
+        XPSlot->SetSize(ESlateSizeRule::Fill);
+        XPSlot->SetVerticalAlignment(VAlign_Center);
+    }
+
+    XPBar = MakeStyledBar(FLinearColor(0.86f, 0.58f, 0.18f, 1.0f), FLinearColor(0.16f, 0.10f, 0.04f, 1.0f), 9.0f);
+    XPBar->SetPercent(0.0f);
+    XPOverlay->AddChildToOverlay(XPBar);
+
+    XPValueText = MakeHUDText(WidgetTree, TEXT("0 / 0 XP"), 8, FLinearColor::White, true, ETextJustify::Center);
+    if (UOverlaySlot* XPValueSlot = XPOverlay->AddChildToOverlay(XPValueText))
+    {
+        XPValueSlot->SetHorizontalAlignment(HAlign_Center);
+        XPValueSlot->SetVerticalAlignment(VAlign_Center);
     }
 
     EnsureAbilityBarVisible();
@@ -590,6 +605,350 @@ void UMOBAMMOGameHUDWidget::EnsureAbilityBarVisible()
 // ─────────────────────────────────────────────────────────────
 // Layout: Target Frame (top-right)
 // ─────────────────────────────────────────────────────────────
+void UMOBAMMOGameHUDWidget::BuildSkillPanel(UCanvasPanel* Canvas)
+{
+    if (!Canvas || !WidgetTree)
+    {
+        return;
+    }
+
+    SkillPanelRoot = MakeGlassPanel(SkillPanelColors::Backdrop, SkillPanelColors::Backdrop.A);
+    SkillPanelRoot->SetVisibility(ESlateVisibility::Collapsed);
+    SkillPanelRoot->SetPadding(FMargin(0.0f));
+
+    if (UCanvasPanelSlot* RootSlot = Canvas->AddChildToCanvas(SkillPanelRoot))
+    {
+        RootSlot->SetAnchors(FAnchors(0.0f, 0.0f, 1.0f, 1.0f));
+        RootSlot->SetOffsets(FMargin(0.0f));
+        RootSlot->SetZOrder(100);
+    }
+
+    UCanvasPanel* PanelCanvas = WidgetTree->ConstructWidget<UCanvasPanel>(UCanvasPanel::StaticClass());
+    SkillPanelRoot->SetContent(PanelCanvas);
+
+    auto AddRawPanel = [this, PanelCanvas](const FVector2D& Position, const FVector2D& Size, const FLinearColor& Color, float Alpha, int32 ZOrder = 0)
+    {
+        UBorder* Border = MakeGlassPanel(Color, Alpha);
+        if (UCanvasPanelSlot* PnlSlot = PanelCanvas->AddChildToCanvas(Border))
+        {
+            PnlSlot->SetPosition(Position);
+            PnlSlot->SetSize(Size);
+            PnlSlot->SetAutoSize(false);
+            PnlSlot->SetZOrder(ZOrder);
+        }
+        return Border;
+    };
+
+    auto AddPanel = [this, PanelCanvas](const FVector2D& Position, const FVector2D& Size, const FLinearColor& Color, float Alpha, int32 ZOrder = 2)
+    {
+        UBorder* Frame = MakeGlassPanel(SkillPanelColors::GoldDim, 0.72f);
+        Frame->SetPadding(FMargin(1.5f));
+        if (UCanvasPanelSlot* PnlSlot = PanelCanvas->AddChildToCanvas(Frame))
+        {
+            PnlSlot->SetPosition(Position);
+            PnlSlot->SetSize(Size);
+            PnlSlot->SetAutoSize(false);
+            PnlSlot->SetZOrder(ZOrder);
+        }
+
+        UBorder* Inner = MakeGlassPanel(Color, Alpha);
+        Inner->SetPadding(FMargin(16.0f));
+        Frame->SetContent(Inner);
+        return Inner;
+    };
+
+    auto AddLine = [this](UCanvasPanel* TargetCanvas, const FVector2D& Position, const FVector2D& Size, const FLinearColor& Color)
+    {
+        UBorder* Line = WidgetTree->ConstructWidget<UBorder>(UBorder::StaticClass());
+        Line->SetBrushColor(Color);
+        if (UCanvasPanelSlot* LnSlot = TargetCanvas->AddChildToCanvas(Line))
+        {
+            LnSlot->SetPosition(Position);
+            LnSlot->SetSize(Size);
+            LnSlot->SetAutoSize(false);
+        }
+    };
+
+    auto AddDecorativeLine = [this, PanelCanvas](const FVector2D& Position, const FVector2D& Size, const FLinearColor& Color, int32 ZOrder = 3)
+    {
+        UBorder* Line = WidgetTree->ConstructWidget<UBorder>(UBorder::StaticClass());
+        Line->SetBrushColor(Color);
+        if (UCanvasPanelSlot* LineSlot = PanelCanvas->AddChildToCanvas(Line))
+        {
+            LineSlot->SetPosition(Position);
+            LineSlot->SetSize(Size);
+            LineSlot->SetAutoSize(false);
+            LineSlot->SetZOrder(ZOrder);
+        }
+    };
+
+    AddRawPanel(FVector2D(0.0f, 0.0f), FVector2D(1700.0f, 900.0f), FLinearColor(0.005f, 0.007f, 0.010f, 1.0f), 0.76f, 0);
+    AddRawPanel(FVector2D(0.0f, 0.0f), FVector2D(1700.0f, 92.0f), FLinearColor(0.010f, 0.011f, 0.014f, 1.0f), 0.88f, 1);
+    AddRawPanel(FVector2D(0.0f, 806.0f), FVector2D(1700.0f, 94.0f), FLinearColor(0.010f, 0.008f, 0.006f, 1.0f), 0.88f, 1);
+    AddDecorativeLine(FVector2D(0.0f, 53.0f), FVector2D(1700.0f, 2.0f), SkillPanelColors::GoldDim, 3);
+    AddDecorativeLine(FVector2D(475.0f, 75.0f), FVector2D(280.0f, 2.0f), SkillPanelColors::GoldDim, 3);
+    AddDecorativeLine(FVector2D(945.0f, 75.0f), FVector2D(280.0f, 2.0f), SkillPanelColors::GoldDim, 3);
+    AddDecorativeLine(FVector2D(750.0f, 57.0f), FVector2D(200.0f, 2.0f), SkillPanelColors::GoldBright, 3);
+
+    UBorder* TopBar = AddRawPanel(FVector2D(0.0f, 0.0f), FVector2D(1700.0f, 54.0f), SkillPanelColors::PanelDeep, 0.96f, 2);
+    TopBar->SetPadding(FMargin(20.0f, 6.0f));
+    UHorizontalBox* TopNav = WidgetTree->ConstructWidget<UHorizontalBox>(UHorizontalBox::StaticClass());
+    TopBar->SetContent(TopNav);
+    const TArray<FString> NavItems = {TEXT("KARAKTER"), TEXT("ENVANTER"), TEXT("YETENEKLER"), TEXT("GOREVLER"), TEXT("HARITA"), TEXT("GRUP"), TEXT("AYARLAR")};
+    for (const FString& Item : NavItems)
+    {
+        const bool bActive = Item == TEXT("YETENEKLER");
+        UTextBlock* NavText = MakeHUDText(WidgetTree, Item, 14, bActive ? SkillPanelColors::GoldBright : SkillPanelColors::TextSecondary, bActive);
+        if (UHorizontalBoxSlot* NavSlot = TopNav->AddChildToHorizontalBox(NavText))
+        {
+            NavSlot->SetPadding(FMargin(0.0f, 9.0f, 46.0f, 0.0f));
+        }
+    }
+
+    UButton* CloseButton = WidgetTree->ConstructWidget<UButton>(UButton::StaticClass());
+    CloseButton->SetBackgroundColor(FLinearColor(0.320f, 0.125f, 0.030f, 1.0f));
+    CloseButton->OnClicked.AddDynamic(this, &UMOBAMMOGameHUDWidget::HandleSkillPanelCloseClicked);
+    CloseButton->AddChild(MakeHUDText(WidgetTree, TEXT("X"), 24, SkillPanelColors::GoldBright, true, ETextJustify::Center));
+    if (UCanvasPanelSlot* CloseSlot = PanelCanvas->AddChildToCanvas(CloseButton))
+    {
+        CloseSlot->SetAnchors(FAnchors(1.0f, 0.0f, 1.0f, 0.0f));
+        CloseSlot->SetAlignment(FVector2D(1.0f, 0.0f));
+        CloseSlot->SetPosition(FVector2D(-22.0f, 4.0f));
+        CloseSlot->SetSize(FVector2D(48.0f, 40.0f));
+        CloseSlot->SetZOrder(10);
+    }
+
+    UTextBlock* Title = MakeHUDText(WidgetTree, TEXT("YETENEKLER"), 44, SkillPanelColors::TextPrimary, true, ETextJustify::Center);
+    if (UCanvasPanelSlot* TitleSlot = PanelCanvas->AddChildToCanvas(Title))
+    {
+        TitleSlot->SetAnchors(FAnchors(0.5f, 0.0f, 0.5f, 0.0f));
+        TitleSlot->SetAlignment(FVector2D(0.5f, 0.0f));
+        TitleSlot->SetPosition(FVector2D(0.0f, 58.0f));
+        TitleSlot->SetSize(FVector2D(520.0f, 52.0f));
+        TitleSlot->SetZOrder(5);
+    }
+
+    UTextBlock* Subtitle = MakeHUDText(WidgetTree, TEXT("Vertical Slice - Temel Sinif"), 17, SkillPanelColors::GoldBright, false, ETextJustify::Center);
+    if (UCanvasPanelSlot* SubtitleSlot = PanelCanvas->AddChildToCanvas(Subtitle))
+    {
+        SubtitleSlot->SetAnchors(FAnchors(0.5f, 0.0f, 0.5f, 0.0f));
+        SubtitleSlot->SetAlignment(FVector2D(0.5f, 0.0f));
+        SubtitleSlot->SetPosition(FVector2D(0.0f, 108.0f));
+        SubtitleSlot->SetSize(FVector2D(520.0f, 28.0f));
+        SubtitleSlot->SetZOrder(5);
+    }
+
+    UBorder* CharacterPanel = AddPanel(FVector2D(30.0f, 136.0f), FVector2D(410.0f, 585.0f), SkillPanelColors::PanelBg, 0.94f);
+    UVerticalBox* CharacterContent = WidgetTree->ConstructWidget<UVerticalBox>(UVerticalBox::StaticClass());
+    CharacterPanel->SetContent(CharacterContent);
+    CharacterContent->AddChildToVerticalBox(MakeHUDText(WidgetTree, TEXT("KARAKTER"), 15, SkillPanelColors::GoldBright, true));
+
+    UBorder* PortraitFrame = MakeGlassPanel(SkillPanelColors::GoldDim, 0.75f);
+    PortraitFrame->SetPadding(FMargin(2.0f));
+    UBorder* Portrait = MakeGlassPanel(FLinearColor(0.030f, 0.034f, 0.038f, 1.0f), 0.98f);
+    Portrait->SetPadding(FMargin(14.0f));
+    PortraitFrame->SetContent(Portrait);
+    UVerticalBox* PortraitContent = WidgetTree->ConstructWidget<UVerticalBox>(UVerticalBox::StaticClass());
+    Portrait->SetContent(PortraitContent);
+    PortraitContent->AddChildToVerticalBox(MakeHUDText(WidgetTree, TEXT("WUKONG"), 28, SkillPanelColors::TextPrimary, true, ETextJustify::Center));
+    PortraitContent->AddChildToVerticalBox(MakeHUDText(WidgetTree, TEXT("STAFF • SPIRIT • ARENA"), 11, SkillPanelColors::Gold, false, ETextJustify::Center));
+    if (UVerticalBoxSlot* PortraitSlot = CharacterContent->AddChildToVerticalBox(PortraitFrame))
+    {
+        PortraitSlot->SetPadding(FMargin(0.0f, 12.0f, 0.0f, 16.0f));
+    }
+
+    SkillPanelCharacterText = MakeHUDText(WidgetTree, TEXT("Hero"), 24, SkillPanelColors::TextPrimary, true);
+    if (UVerticalBoxSlot* CharSlot = CharacterContent->AddChildToVerticalBox(SkillPanelCharacterText))
+    {
+        CharSlot->SetPadding(FMargin(0.0f, 0.0f, 0.0f, 10.0f));
+    }
+    SkillPanelStatsText = MakeHUDText(WidgetTree, TEXT(""), 13, SkillPanelColors::TextSecondary);
+    CharacterContent->AddChildToVerticalBox(SkillPanelStatsText);
+
+    UBorder* TreePanel = AddPanel(FVector2D(464.0f, 150.0f), FVector2D(710.0f, 574.0f), SkillPanelColors::PanelDeep, 0.93f);
+    UCanvasPanel* TreeCanvas = WidgetTree->ConstructWidget<UCanvasPanel>(UCanvasPanel::StaticClass());
+    TreePanel->SetContent(TreeCanvas);
+
+    AddLine(TreeCanvas, FVector2D(16.0f, 16.0f), FVector2D(678.0f, 1.0f), SkillPanelColors::GoldDim);
+    AddLine(TreeCanvas, FVector2D(16.0f, 520.0f), FVector2D(678.0f, 1.0f), SkillPanelColors::GoldDim);
+
+    UHorizontalBox* Tabs = WidgetTree->ConstructWidget<UHorizontalBox>(UHorizontalBox::StaticClass());
+    if (UCanvasPanelSlot* TabsSlot = TreeCanvas->AddChildToCanvas(Tabs))
+    {
+        TabsSlot->SetPosition(FVector2D(76.0f, 22.0f));
+        TabsSlot->SetSize(FVector2D(560.0f, 40.0f));
+    }
+    const TArray<FString> TabsText = {TEXT("SAVASCI"), TEXT("SILAH USTALIGI"), TEXT("KORUYUCU")};
+    for (int32 Index = 0; Index < TabsText.Num(); ++Index)
+    {
+        UTextBlock* Tab = MakeHUDText(WidgetTree, TabsText[Index], 13, Index == 0 ? SkillPanelColors::Gold : SkillPanelColors::TextMuted, Index == 0, ETextJustify::Center);
+        if (UHorizontalBoxSlot* TabSlot = Tabs->AddChildToHorizontalBox(Tab))
+        {
+            TabSlot->SetSize(ESlateSizeRule::Fill);
+        }
+    }
+
+    AddLine(TreeCanvas, FVector2D(174.0f, 150.0f), FVector2D(190.0f, 3.0f), SkillPanelColors::GoldBright);
+    AddLine(TreeCanvas, FVector2D(364.0f, 150.0f), FVector2D(188.0f, 3.0f), SkillPanelColors::Blue);
+    AddLine(TreeCanvas, FVector2D(174.0f, 300.0f), FVector2D(190.0f, 3.0f), SkillPanelColors::Blue);
+    AddLine(TreeCanvas, FVector2D(364.0f, 300.0f), FVector2D(188.0f, 3.0f), SkillPanelColors::GoldDim);
+    AddLine(TreeCanvas, FVector2D(174.0f, 150.0f), FVector2D(3.0f, 300.0f), SkillPanelColors::GoldDim);
+    AddLine(TreeCanvas, FVector2D(364.0f, 150.0f), FVector2D(3.0f, 300.0f), SkillPanelColors::Blue);
+    AddLine(TreeCanvas, FVector2D(552.0f, 150.0f), FVector2D(3.0f, 300.0f), SkillPanelColors::GoldDim);
+
+    SkillPanelNodeButtons.Reset();
+    SkillPanelNodeNameTexts.Reset();
+    SkillPanelNodeRankTexts.Reset();
+    const TArray<FVector2D> NodePositions = {FVector2D(86.0f, 88.0f), FVector2D(276.0f, 88.0f), FVector2D(466.0f, 88.0f), FVector2D(86.0f, 238.0f), FVector2D(276.0f, 238.0f)};
+    for (int32 Index = 0; Index < NodePositions.Num(); ++Index)
+    {
+        UButton* NodeButton = WidgetTree->ConstructWidget<UButton>(UButton::StaticClass());
+        NodeButton->SetBackgroundColor(Index == SelectedSkillPanelIndex ? SkillPanelColors::PanelAccent : FLinearColor(0.070f, 0.055f, 0.036f, 1.0f));
+        switch (Index)
+        {
+            case 0: NodeButton->OnClicked.AddDynamic(this, &UMOBAMMOGameHUDWidget::HandleSkillSlot1Clicked); break;
+            case 1: NodeButton->OnClicked.AddDynamic(this, &UMOBAMMOGameHUDWidget::HandleSkillSlot2Clicked); break;
+            case 2: NodeButton->OnClicked.AddDynamic(this, &UMOBAMMOGameHUDWidget::HandleSkillSlot3Clicked); break;
+            case 3: NodeButton->OnClicked.AddDynamic(this, &UMOBAMMOGameHUDWidget::HandleSkillSlot4Clicked); break;
+            default: NodeButton->OnClicked.AddDynamic(this, &UMOBAMMOGameHUDWidget::HandleSkillSlot5Clicked); break;
+        }
+
+        UVerticalBox* NodeContent = WidgetTree->ConstructWidget<UVerticalBox>(UVerticalBox::StaticClass());
+        NodeButton->AddChild(NodeContent);
+        NodeContent->AddChildToVerticalBox(MakeHUDText(WidgetTree, FString::Printf(TEXT("%d"), Index + 1), 22, SkillPanelColors::GoldBright, true, ETextJustify::Center));
+        UTextBlock* NameText = MakeHUDText(WidgetTree, TEXT("Ability"), 12, SkillPanelColors::TextPrimary, true, ETextJustify::Center);
+        NodeContent->AddChildToVerticalBox(NameText);
+        UTextBlock* RankText = MakeHUDText(WidgetTree, TEXT("1/5"), 13, SkillPanelColors::Gold, false, ETextJustify::Center);
+        NodeContent->AddChildToVerticalBox(RankText);
+
+        if (UCanvasPanelSlot* NodeSlot = TreeCanvas->AddChildToCanvas(NodeButton))
+        {
+            NodeSlot->SetPosition(NodePositions[Index]);
+            NodeSlot->SetSize(FVector2D(106.0f, 92.0f));
+            NodeSlot->SetAutoSize(false);
+        }
+        SkillPanelNodeButtons.Add(NodeButton);
+        SkillPanelNodeNameTexts.Add(NameText);
+        SkillPanelNodeRankTexts.Add(RankText);
+    }
+
+    const TArray<FVector2D> LockedPositions = {FVector2D(466.0f, 238.0f), FVector2D(86.0f, 388.0f), FVector2D(276.0f, 388.0f), FVector2D(466.0f, 388.0f)};
+    for (const FVector2D& LockedPosition : LockedPositions)
+    {
+        UBorder* LockedNode = MakeGlassPanel(FLinearColor(0.055f, 0.050f, 0.052f, 1.0f), 0.96f);
+        LockedNode->SetPadding(FMargin(8.0f));
+        UVerticalBox* LockedContent = WidgetTree->ConstructWidget<UVerticalBox>(UVerticalBox::StaticClass());
+        LockedNode->SetContent(LockedContent);
+        LockedContent->AddChildToVerticalBox(MakeHUDText(WidgetTree, TEXT("LOCKED"), 13, SkillPanelColors::TextMuted, true, ETextJustify::Center));
+        LockedContent->AddChildToVerticalBox(MakeHUDText(WidgetTree, TEXT("0/5"), 12, SkillPanelColors::TextMuted, false, ETextJustify::Center));
+        if (UCanvasPanelSlot* LockedSlot = TreeCanvas->AddChildToCanvas(LockedNode))
+        {
+            LockedSlot->SetPosition(LockedPosition);
+            LockedSlot->SetSize(FVector2D(104.0f, 96.0f));
+        }
+    }
+
+    SkillPanelPointsText = MakeHUDText(WidgetTree, TEXT("0 YETENEK PUANI"), 24, SkillPanelColors::GoldBright, true, ETextJustify::Center);
+    if (UCanvasPanelSlot* PointsSlot = TreeCanvas->AddChildToCanvas(SkillPanelPointsText))
+    {
+        PointsSlot->SetPosition(FVector2D(250.0f, 496.0f));
+        PointsSlot->SetSize(FVector2D(200.0f, 42.0f));
+    }
+
+    UBorder* DetailPanel = AddPanel(FVector2D(1196.0f, 136.0f), FVector2D(420.0f, 585.0f), SkillPanelColors::PanelBg, 0.94f);
+    UVerticalBox* DetailContent = WidgetTree->ConstructWidget<UVerticalBox>(UVerticalBox::StaticClass());
+    DetailPanel->SetContent(DetailContent);
+    DetailContent->AddChildToVerticalBox(MakeHUDText(WidgetTree, TEXT("SECILEN YETENEK"), 15, SkillPanelColors::GoldBright, true, ETextJustify::Center));
+    SkillPanelDetailTitleText = MakeHUDText(WidgetTree, TEXT("Ability"), 28, SkillPanelColors::TextPrimary, true);
+    if (UVerticalBoxSlot* DtlSlot = DetailContent->AddChildToVerticalBox(SkillPanelDetailTitleText))
+    {
+        DtlSlot->SetPadding(FMargin(0.0f, 28.0f, 0.0f, 4.0f));
+    }
+    SkillPanelDetailRankText = MakeHUDText(WidgetTree, TEXT("1/5"), 14, SkillPanelColors::Gold, true);
+    DetailContent->AddChildToVerticalBox(SkillPanelDetailRankText);
+    SkillPanelDetailBodyText = MakeHUDText(WidgetTree, TEXT(""), 14, SkillPanelColors::TextSecondary);
+    if (UVerticalBoxSlot* BodySlot = DetailContent->AddChildToVerticalBox(SkillPanelDetailBodyText))
+    {
+        BodySlot->SetPadding(FMargin(0.0f, 24.0f, 0.0f, 20.0f));
+    }
+    SkillPanelUpgradeButton = WidgetTree->ConstructWidget<UButton>(UButton::StaticClass());
+    SkillPanelUpgradeButton->SetBackgroundColor(SkillPanelColors::PanelAccent);
+    SkillPanelUpgradeButton->OnClicked.AddDynamic(this, &UMOBAMMOGameHUDWidget::HandleSkillUpgradeClicked);
+    SkillPanelUpgradeText = MakeHUDText(WidgetTree, TEXT("YUKSELT"), 18, SkillPanelColors::TextPrimary, true, ETextJustify::Center);
+    SkillPanelUpgradeButton->AddChild(SkillPanelUpgradeText);
+    USizeBox* UpgradeBox = WidgetTree->ConstructWidget<USizeBox>(USizeBox::StaticClass());
+    UpgradeBox->SetHeightOverride(54.0f);
+    UpgradeBox->AddChild(SkillPanelUpgradeButton);
+    DetailContent->AddChildToVerticalBox(UpgradeBox);
+
+    UBorder* CommandPanel = AddPanel(FVector2D(26.0f, 740.0f), FVector2D(240.0f, 136.0f), SkillPanelColors::PanelDeep, 0.92f);
+    UVerticalBox* CommandContent = WidgetTree->ConstructWidget<UVerticalBox>(UVerticalBox::StaticClass());
+    CommandPanel->SetContent(CommandContent);
+    CommandContent->AddChildToVerticalBox(MakeHUDText(WidgetTree, TEXT("HIZLI KOMUTLAR"), 13, SkillPanelColors::GoldBright, true));
+    CommandContent->AddChildToVerticalBox(MakeHUDText(WidgetTree, TEXT("Q: Kacinma\nE: Hedef Sec\nR: Yeniden Baglan"), 12, SkillPanelColors::TextSecondary, false));
+
+    UCanvasPanel* BottomCanvas = WidgetTree->ConstructWidget<UCanvasPanel>(UCanvasPanel::StaticClass());
+    UBorder* BottomPanel = AddPanel(FVector2D(360.0f, 738.0f), FVector2D(820.0f, 142.0f), SkillPanelColors::PanelDeep, 0.93f);
+    BottomPanel->SetContent(BottomCanvas);
+
+    UProgressBar* SkillPanelHealthBar = MakeStyledBar(SkillPanelColors::Red, FLinearColor(0.135f, 0.025f, 0.020f, 1.0f), 16.0f);
+    SkillPanelHealthBar->SetPercent(0.78f);
+    if (UCanvasPanelSlot* HealthSlot = BottomCanvas->AddChildToCanvas(SkillPanelHealthBar))
+    {
+        HealthSlot->SetPosition(FVector2D(112.0f, 8.0f));
+        HealthSlot->SetSize(FVector2D(300.0f, 18.0f));
+    }
+    UProgressBar* SkillPanelManaBar = MakeStyledBar(SkillPanelColors::Blue, FLinearColor(0.020f, 0.040f, 0.115f, 1.0f), 16.0f);
+    SkillPanelManaBar->SetPercent(0.72f);
+    if (UCanvasPanelSlot* ManaSlot = BottomCanvas->AddChildToCanvas(SkillPanelManaBar))
+    {
+        ManaSlot->SetPosition(FVector2D(414.0f, 8.0f));
+        ManaSlot->SetSize(FVector2D(300.0f, 18.0f));
+    }
+    if (UCanvasPanelSlot* LevelSlot = BottomCanvas->AddChildToCanvas(MakeHUDText(WidgetTree, TEXT("12"), 34, SkillPanelColors::GoldBright, true, ETextJustify::Center)))
+    {
+        LevelSlot->SetPosition(FVector2D(28.0f, 32.0f));
+        LevelSlot->SetSize(FVector2D(72.0f, 52.0f));
+    }
+
+    UHorizontalBox* BottomRow = WidgetTree->ConstructWidget<UHorizontalBox>(UHorizontalBox::StaticClass());
+    if (UCanvasPanelSlot* BottomRowSlot = BottomCanvas->AddChildToCanvas(BottomRow))
+    {
+        BottomRowSlot->SetPosition(FVector2D(112.0f, 36.0f));
+        BottomRowSlot->SetSize(FVector2D(650.0f, 80.0f));
+    }
+    for (int32 Index = 0; Index < 9; ++Index)
+    {
+        UBorder* QuickSlot = MakeGlassPanel(Index < 5 ? SkillPanelColors::PanelSoft : FLinearColor(0.060f, 0.058f, 0.060f, 1.0f), 1.0f);
+        QuickSlot->SetPadding(FMargin(6.0f));
+        QuickSlot->SetContent(MakeHUDText(WidgetTree, FString::Printf(TEXT("%d"), Index + 1), 22, Index < 5 ? SkillPanelColors::GoldBright : SkillPanelColors::TextMuted, true, ETextJustify::Center));
+        USizeBox* SlotBox = WidgetTree->ConstructWidget<USizeBox>(USizeBox::StaticClass());
+        SlotBox->SetWidthOverride(68.0f);
+        SlotBox->SetHeightOverride(68.0f);
+        SlotBox->AddChild(QuickSlot);
+        if (UHorizontalBoxSlot* BtmSlot = BottomRow->AddChildToHorizontalBox(SlotBox))
+        {
+            BtmSlot->SetPadding(FMargin(0.0f, 0.0f, 8.0f, 0.0f));
+        }
+    }
+
+    UBorder* QuestPanel = AddPanel(FVector2D(1252.0f, 740.0f), FVector2D(360.0f, 136.0f), SkillPanelColors::PanelDeep, 0.92f);
+    UHorizontalBox* QuestRow = WidgetTree->ConstructWidget<UHorizontalBox>(UHorizontalBox::StaticClass());
+    QuestPanel->SetContent(QuestRow);
+    UTextBlock* GroupText = MakeHUDText(WidgetTree, TEXT("GRUP\nWarriorTR   Sev. 12\nMageLight   Sev. 12\nElvenArcher Sev. 12"), 12, SkillPanelColors::TextSecondary, false);
+    UTextBlock* QuestText = MakeHUDText(WidgetTree, TEXT("GOREV\nAna Gorev: Kayip Miras\nYan Gorev: 5/10 Kurt postu topla"), 12, SkillPanelColors::TextSecondary, false);
+    if (UHorizontalBoxSlot* GroupSlot = QuestRow->AddChildToHorizontalBox(GroupText))
+    {
+        GroupSlot->SetSize(ESlateSizeRule::Fill);
+    }
+    if (UHorizontalBoxSlot* QuestSlot = QuestRow->AddChildToHorizontalBox(QuestText))
+    {
+        QuestSlot->SetSize(ESlateSizeRule::Fill);
+    }
+
+    RefreshSkillPanel();
+}
+
 void UMOBAMMOGameHUDWidget::BuildTargetFrame(UCanvasPanel* Canvas)
 {
     TargetFrameBorder = WidgetTree->ConstructWidget<UBorder>(UBorder::StaticClass());
@@ -1076,6 +1435,169 @@ void UMOBAMMOGameHUDWidget::BuildCenterNotifications(UCanvasPanel* Canvas)
 // ─────────────────────────────────────────────────────────────
 // Bind
 // ─────────────────────────────────────────────────────────────
+void UMOBAMMOGameHUDWidget::RefreshSkillPanel()
+{
+    if (!SkillPanelRoot)
+    {
+        return;
+    }
+
+    SkillPanelRoot->SetVisibility(bSkillPanelOpen ? ESlateVisibility::Visible : ESlateVisibility::Collapsed);
+    if (!bSkillPanelOpen)
+    {
+        return;
+    }
+
+    const APlayerController* PC = GetOwningPlayer();
+    const AMOBAMMOPlayerState* PS = PC ? PC->GetPlayerState<AMOBAMMOPlayerState>() : nullptr;
+    const FString ClassId = PS ? PS->GetClassId() : TEXT("");
+    const TArray<FMOBAMMOAbilityDefinition> Abilities = MOBAMMOAbilitySet::ForClass(ClassId);
+    SelectedSkillPanelIndex = FMath::Clamp(SelectedSkillPanelIndex, 0, FMath::Max(0, Abilities.Num() - 1));
+
+    if (SkillPanelCharacterText)
+    {
+        const FString CharacterName = PS
+            ? (PS->GetCharacterName().IsEmpty() ? PS->GetPlayerName() : PS->GetCharacterName())
+            : TEXT("Hero");
+        const FString ClassLabel = ClassId.Equals(TEXT("mage"), ESearchCase::IgnoreCase) ? TEXT("Wukong Mage") : TEXT("Savasci");
+        SkillPanelCharacterText->SetText(FText::FromString(FString::Printf(TEXT("%s\n%s - Seviye %d"),
+            *CharacterName,
+            *ClassLabel,
+            PS ? PS->GetCharacterLevel() : 1)));
+    }
+
+    if (SkillPanelStatsText)
+    {
+        const int32 Level = PS ? PS->GetCharacterLevel() : 1;
+        const int32 Strength = 42 + Level * 3;
+        const int32 Agility = 28 + Level * 2;
+        const int32 Endurance = 36 + Level * 3;
+        const int32 PhysicalAttack = 80 + Level * 5;
+        const int32 Armor = 120 + Level * 4;
+        SkillPanelStatsText->SetText(FText::FromString(FString::Printf(
+            TEXT("XP  %d / %d\nGold  %d\n\nGuc  %d\nCeviklik  %d\nDayaniklilik  %d\nMana  %.0f / %.0f\nCan  %.0f / %.0f\n\nFiziksel Saldiri  %d\nZirh  %d\nK/D  %d / %d"),
+            PS ? PS->GetCharacterExperience() : 0,
+            PS ? PS->GetExperienceToNextLevel() : 100,
+            PS ? PS->GetGold() : 0,
+            Strength,
+            Agility,
+            Endurance,
+            PS ? PS->GetCurrentMana() : 0.0f,
+            PS ? PS->GetMaxMana() : 0.0f,
+            PS ? PS->GetCurrentHealth() : 0.0f,
+            PS ? PS->GetMaxHealth() : 0.0f,
+            PhysicalAttack,
+            Armor,
+            PS ? PS->GetKills() : 0,
+            PS ? PS->GetDeaths() : 0)));
+    }
+
+    if (SkillPanelPointsText)
+    {
+        SkillPanelPointsText->SetText(FText::FromString(FString::Printf(TEXT("%d\nYETENEK PUANI"), PS ? PS->GetSkillPoints() : 0)));
+    }
+
+    for (int32 Index = 0; Index < SkillPanelNodeButtons.Num(); ++Index)
+    {
+        const bool bSelected = Index == SelectedSkillPanelIndex;
+        if (SkillPanelNodeButtons[Index])
+        {
+            SkillPanelNodeButtons[Index]->SetBackgroundColor(bSelected ? SkillPanelColors::PanelAccent : SkillPanelColors::PanelSoft);
+        }
+        if (SkillPanelNodeNameTexts.IsValidIndex(Index) && SkillPanelNodeNameTexts[Index])
+        {
+            const FString Name = Abilities.IsValidIndex(Index) ? Abilities[Index].Name : TEXT("Locked");
+            SkillPanelNodeNameTexts[Index]->SetText(FText::FromString(Name));
+            SkillPanelNodeNameTexts[Index]->SetColorAndOpacity(FSlateColor(bSelected ? SkillPanelColors::TextPrimary : SkillPanelColors::TextSecondary));
+        }
+        if (SkillPanelNodeRankTexts.IsValidIndex(Index) && SkillPanelNodeRankTexts[Index])
+        {
+            const int32 Rank = (PS && Index < 4) ? PS->GetAbilityRank(Index) : 1;
+            const FString RankText = Index < 4 ? FString::Printf(TEXT("%d/5"), Rank) : TEXT("ACTIVE");
+            SkillPanelNodeRankTexts[Index]->SetText(FText::FromString(RankText));
+            SkillPanelNodeRankTexts[Index]->SetColorAndOpacity(FSlateColor(bSelected ? SkillPanelColors::GoldBright : SkillPanelColors::TextSecondary));
+        }
+    }
+
+    const FMOBAMMOAbilityDefinition SelectedAbility = Abilities.IsValidIndex(SelectedSkillPanelIndex)
+        ? Abilities[SelectedSkillPanelIndex]
+        : MOBAMMOAbilitySet::ArcBurst();
+    const int32 SelectedRank = (PS && SelectedSkillPanelIndex < 4) ? PS->GetAbilityRank(SelectedSkillPanelIndex) : 1;
+    const bool bCanUpgrade = PS && SelectedSkillPanelIndex < 4 && PS->CanUpgradeAbility(SelectedSkillPanelIndex);
+
+    if (SkillPanelDetailTitleText)
+    {
+        SkillPanelDetailTitleText->SetText(FText::FromString(SelectedAbility.Name));
+    }
+    if (SkillPanelDetailRankText)
+    {
+        const FString RankLine = SelectedSkillPanelIndex < 4
+            ? FString::Printf(TEXT("Seviye %d/5"), SelectedRank)
+            : TEXT("Aktif Sistem Yetenegi");
+        SkillPanelDetailRankText->SetText(FText::FromString(RankLine));
+    }
+    if (SkillPanelDetailBodyText)
+    {
+        const FString AbilityType =
+            SelectedAbility.Kind == EMOBAMMOAbilityKind::Damage ? TEXT("Hasar") :
+            SelectedAbility.Kind == EMOBAMMOAbilityKind::Heal ? TEXT("Destek") :
+            SelectedAbility.Kind == EMOBAMMOAbilityKind::Respawn ? TEXT("Dirilis") : TEXT("Yardimci");
+        FString Body = FString::Printf(
+            TEXT("%s\n\nTur: %s\nMaliyet: %.0f Mana\nBekleme Suresi: %.1f sn.\n\nMevcut Seviye Etkisi:\n%s"),
+            *SelectedAbility.Description,
+            *AbilityType,
+            SelectedAbility.ManaCost,
+            SelectedAbility.Cooldown,
+            SelectedSkillPanelIndex < 4
+                ? *FString::Printf(TEXT("Guc +%d%%, bekleme suresi -%d%%"), (SelectedRank - 1) * 20, (SelectedRank - 1) * 10)
+                : TEXT("Savas disi kaldiginda karakteri arenaya geri dondurur."));
+        if (SelectedSkillPanelIndex < 4 && SelectedRank < AMOBAMMOPlayerState::MaxAbilityRank)
+        {
+            Body += FString::Printf(TEXT("\n\nSonraki Seviye (%d/5):\nGuc +%d%%, bekleme suresi -%d%%"),
+                SelectedRank + 1,
+                SelectedRank * 20,
+                SelectedRank * 10);
+        }
+        SkillPanelDetailBodyText->SetText(FText::FromString(Body));
+    }
+
+    if (SkillPanelUpgradeButton)
+    {
+        SkillPanelUpgradeButton->SetIsEnabled(bCanUpgrade);
+        SkillPanelUpgradeButton->SetBackgroundColor(bCanUpgrade ? SkillPanelColors::PanelAccent : FLinearColor(0.090f, 0.076f, 0.054f, 1.0f));
+    }
+    if (SkillPanelUpgradeText)
+    {
+        SkillPanelUpgradeText->SetText(FText::FromString(bCanUpgrade ? TEXT("YUKSELT\n1 Yetenek Puani") : TEXT("YUKSELTILEMEZ")));
+        SkillPanelUpgradeText->SetColorAndOpacity(FSlateColor(bCanUpgrade ? SkillPanelColors::TextPrimary : SkillPanelColors::TextMuted));
+    }
+}
+
+void UMOBAMMOGameHUDWidget::HandleSkillSlot1Clicked() { SelectedSkillPanelIndex = 0; RefreshSkillPanel(); }
+void UMOBAMMOGameHUDWidget::HandleSkillSlot2Clicked() { SelectedSkillPanelIndex = 1; RefreshSkillPanel(); }
+void UMOBAMMOGameHUDWidget::HandleSkillSlot3Clicked() { SelectedSkillPanelIndex = 2; RefreshSkillPanel(); }
+void UMOBAMMOGameHUDWidget::HandleSkillSlot4Clicked() { SelectedSkillPanelIndex = 3; RefreshSkillPanel(); }
+void UMOBAMMOGameHUDWidget::HandleSkillSlot5Clicked() { SelectedSkillPanelIndex = 4; RefreshSkillPanel(); }
+
+void UMOBAMMOGameHUDWidget::HandleSkillUpgradeClicked()
+{
+    if (SelectedSkillPanelIndex >= 4)
+    {
+        return;
+    }
+
+    if (AMOBAMMOPlayerController* PC = Cast<AMOBAMMOPlayerController>(GetOwningPlayer()))
+    {
+        PC->RequestSpendSkillPoint(SelectedSkillPanelIndex);
+    }
+    RefreshSkillPanel();
+}
+
+void UMOBAMMOGameHUDWidget::HandleSkillPanelCloseClicked()
+{
+    CloseSkillPanel();
+}
+
 void UMOBAMMOGameHUDWidget::BindToSubsystem(UMOBAMMOBackendSubsystem* BackendSubsystem)
 {
     if (!BackendSubsystem || bBoundToSubsystem)
@@ -1158,13 +1680,13 @@ static UBorder* MakeMinimapDot(UWidgetTree* Tree, UCanvasPanel* Canvas,
     UBorder* Dot = Tree->ConstructWidget<UBorder>(UBorder::StaticClass());
     Dot->SetBrushColor(Color);
     Dot->SetPadding(FMargin(0.0f));
-    if (UCanvasPanelSlot* Slot = Canvas->AddChildToCanvas(Dot))
+    if (UCanvasPanelSlot* DotSlot = Canvas->AddChildToCanvas(Dot))
     {
-        Slot->SetAnchors(FAnchors(1.0f, 0.0f, 1.0f, 0.0f));
-        Slot->SetAlignment(FVector2D(0.0f, 0.0f));
-        Slot->SetSize(FVector2D(Size, Size));
-        Slot->SetAutoSize(false);
-        Slot->SetPosition(FVector2D(0.0f, 0.0f)); // will be updated in UpdateMinimap
+        DotSlot->SetAnchors(FAnchors(1.0f, 0.0f, 1.0f, 0.0f));
+        DotSlot->SetAlignment(FVector2D(0.0f, 0.0f));
+        DotSlot->SetSize(FVector2D(Size, Size));
+        DotSlot->SetAutoSize(false);
+        DotSlot->SetPosition(FVector2D(0.0f, 0.0f)); // will be updated in UpdateMinimap
     }
     return Dot;
 }
@@ -1689,7 +2211,7 @@ void UMOBAMMOGameHUDWidget::UpdateTexts()
 
     if (PlayerClassLevelText)
     {
-        PlayerClassLevelText->SetText(FText::FromString(FString::Printf(TEXT("%s  ·  Level %d"), *ClassId, CharacterLevel)));
+        PlayerClassLevelText->SetText(FText::FromString(FString::Printf(TEXT("%d"), CharacterLevel)));
     }
 
     if (GoldText)
@@ -1706,7 +2228,7 @@ void UMOBAMMOGameHUDWidget::UpdateTexts()
     if (PlayerLifeStateText)
     {
         const bool bAlive = LifeState == TEXT("Alive");
-        PlayerLifeStateText->SetText(FText::FromString(bAlive ? TEXT("● ALIVE") : TEXT("● DEAD")));
+        PlayerLifeStateText->SetText(FText::FromString(bAlive ? TEXT("ALIVE") : TEXT("DOWN")));
         PlayerLifeStateText->SetColorAndOpacity(FSlateColor(bAlive ? HUDColors::TextAlive : HUDColors::TextDead));
     }
 

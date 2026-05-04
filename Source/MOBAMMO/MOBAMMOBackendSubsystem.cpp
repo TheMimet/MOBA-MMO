@@ -9,10 +9,14 @@
 #include "JsonObjectWrapper.h"
 #include "MOBAMMOBackendConfig.h"
 #include "MOBAMMOPlayerState.h"
+#include "HAL/FileManager.h"
 #include "Misc/CommandLine.h"
+#include "Misc/FileHelper.h"
 #include "Misc/Parse.h"
+#include "Misc/Paths.h"
 #include "Serialization/JsonReader.h"
 #include "Serialization/JsonSerializer.h"
+#include "Serialization/JsonWriter.h"
 #include "Async/Async.h"
 #include "GameFramework/Pawn.h"
 #include "TimerManager.h"
@@ -329,21 +333,153 @@ void UMOBAMMOBackendSubsystem::MockLogin(const FString& Username)
     RunLoginRequest(Username);
 }
 
-void UMOBAMMOBackendSubsystem::LoginFromWebUI(const FString& Username)
+void UMOBAMMOBackendSubsystem::LoginFromWebUI(const FString& Username, const FString& Password, bool bRememberMe)
 {
-    RunLoginRequest(Username);
+    RunLoginRequest(Username, Password, bRememberMe);
 }
 
-void UMOBAMMOBackendSubsystem::RunLoginRequest(const FString& Username)
+void UMOBAMMOBackendSubsystem::RegisterFromWebUI(const FString& Username, const FString& Password, bool bRememberMe)
+{
+    RunAuthRequest(TEXT("/auth/register"), Username, Password, false, bRememberMe);
+}
+
+void UMOBAMMOBackendSubsystem::RefreshAuthSession()
+{
+    FString TrimmedRefreshToken = LastRefreshToken.TrimStartAndEnd();
+    if (TrimmedRefreshToken.IsEmpty())
+    {
+        FString PersistedUsername;
+        FString PersistedAccountId;
+        if (LoadPersistedAuthSession(TrimmedRefreshToken, PersistedUsername, PersistedAccountId))
+        {
+            LastRefreshToken = TrimmedRefreshToken;
+            if (!PersistedUsername.IsEmpty())
+            {
+                LastUsername = PersistedUsername;
+            }
+            if (!PersistedAccountId.IsEmpty())
+            {
+                LastAccountId = PersistedAccountId;
+            }
+            bPersistRefreshToken = true;
+        }
+    }
+
+    if (TrimmedRefreshToken.IsEmpty())
+    {
+        LastErrorMessage = TEXT("Refresh token bulunamadi. Lutfen tekrar login olun.");
+        LoginStatus = TEXT("Failed");
+        NotifyDebugStateChanged();
+        OnLoginFailed.Broadcast(LastErrorMessage);
+        return;
+    }
+
+    LoginStatus = TEXT("Refreshing");
+    LastErrorMessage.Reset();
+    NotifyDebugStateChanged();
+
+    TSharedRef<IHttpRequest, ESPMode::ThreadSafe> Request = FHttpModule::Get().CreateRequest();
+    Request->SetURL(BuildUrl(TEXT("/auth/refresh")));
+    Request->SetVerb(TEXT("POST"));
+    Request->SetHeader(TEXT("Content-Type"), TEXT("application/json"));
+    Request->SetContentAsString(FString::Printf(TEXT("{\"refreshToken\":\"%s\"}"), *TrimmedRefreshToken.ReplaceCharWithEscapedChar()));
+
+    Request->OnProcessRequestComplete().BindLambda(
+        [this](FHttpRequestPtr HttpRequest, FHttpResponsePtr Response, bool bWasSuccessful)
+        {
+            if (!bWasSuccessful || !Response.IsValid())
+            {
+                RunOnGameThread([this]()
+                {
+                    LastErrorMessage = TEXT("Auth yenileme istegi basarisiz oldu.");
+                    LoginStatus = TEXT("Failed");
+                    NotifyDebugStateChanged();
+                    OnLoginFailed.Broadcast(LastErrorMessage);
+                });
+                return;
+            }
+
+            TSharedPtr<FJsonObject> JsonObject;
+            FString ErrorMessage;
+            if (!TryReadJsonResponse(Response, JsonObject, ErrorMessage))
+            {
+                RunOnGameThread([this, ErrorMessage]()
+                {
+                    LastErrorMessage = ErrorMessage;
+                    LoginStatus = TEXT("Failed");
+                    LastAuthToken.Reset();
+                    LastRefreshToken.Reset();
+                    ClearPersistedAuthSession();
+                    bPersistRefreshToken = false;
+                    NotifyDebugStateChanged();
+                    OnLoginFailed.Broadcast(ErrorMessage);
+                });
+                return;
+            }
+
+            HandleAuthSessionResponse(JsonObject, bPersistRefreshToken);
+        }
+    );
+
+    if (!Request->ProcessRequest())
+    {
+        LastErrorMessage = TEXT("Auth yenileme istegi baslatilamadi.");
+        LoginStatus = TEXT("Failed");
+        NotifyDebugStateChanged();
+        OnLoginFailed.Broadcast(LastErrorMessage);
+    }
+}
+
+void UMOBAMMOBackendSubsystem::LogoutFromWebUI()
+{
+    RunLogoutRequest();
+}
+
+bool UMOBAMMOBackendSubsystem::TryRestoreRememberedAuthSession()
+{
+    if (LoginStatus == TEXT("LoggingIn") || LoginStatus == TEXT("Refreshing") || LoginStatus == TEXT("Succeeded"))
+    {
+        return false;
+    }
+
+    FString PersistedRefreshToken;
+    FString PersistedUsername;
+    FString PersistedAccountId;
+    if (!LoadPersistedAuthSession(PersistedRefreshToken, PersistedUsername, PersistedAccountId))
+    {
+        return false;
+    }
+
+    LastRefreshToken = PersistedRefreshToken;
+    if (!PersistedUsername.IsEmpty())
+    {
+        LastUsername = PersistedUsername;
+    }
+    if (!PersistedAccountId.IsEmpty())
+    {
+        LastAccountId = PersistedAccountId;
+    }
+    bPersistRefreshToken = true;
+    RefreshAuthSession();
+    return true;
+}
+
+void UMOBAMMOBackendSubsystem::RunLoginRequest(const FString& Username, const FString& Password, bool bRememberMe)
+{
+    RunAuthRequest(TEXT("/auth/login"), Username, Password, true, bRememberMe);
+}
+
+void UMOBAMMOBackendSubsystem::RunAuthRequest(const FString& RoutePath, const FString& Username, const FString& Password, bool bAllowPasswordlessLogin, bool bRememberMe)
 {
     if (ShouldSkipAutomaticBackendBootstrap(this))
     {
-        UE_LOG(LogTemp, Log, TEXT("[Backend] MockLogin skipped because world is already a network client."));
+        UE_LOG(LogTemp, Log, TEXT("[Backend] Auth request skipped because world is already a network client."));
         NotifyDebugStateChanged();
         return;
     }
 
     const FString TrimmedUsername = Username.TrimStartAndEnd();
+    const FString TrimmedPassword = Password.TrimStartAndEnd();
     if (TrimmedUsername.IsEmpty())
     {
         LastErrorMessage = TEXT("Username gereklidir.");
@@ -353,24 +489,48 @@ void UMOBAMMOBackendSubsystem::RunLoginRequest(const FString& Username)
         return;
     }
 
+    if (!bAllowPasswordlessLogin && TrimmedPassword.IsEmpty())
+    {
+        LastErrorMessage = TEXT("Sifre gereklidir.");
+        LoginStatus = TEXT("Failed");
+        NotifyDebugStateChanged();
+        OnLoginFailed.Broadcast(TEXT("Sifre gereklidir."));
+        return;
+    }
+
     LastUsername = TrimmedUsername;
     LastErrorMessage.Reset();
+    bPersistRefreshToken = bRememberMe;
+    if (!bRememberMe)
+    {
+        ClearPersistedAuthSession();
+    }
     bManualCharacterFlowPending = false;
     bMainMenuVisible = false;
     bCharacterSelectRequested = false;
     LoginStatus = TEXT("LoggingIn");
     NotifyDebugStateChanged();
-    const FString LoginUrl = BuildUrl(TEXT("/auth/login"));
-    UE_LOG(LogTemp, Log, TEXT("[Backend] MockLogin starting. Username=%s Url=%s"), *TrimmedUsername, *LoginUrl);
+    const FString LoginUrl = BuildUrl(RoutePath);
+    UE_LOG(LogTemp, Log, TEXT("[Backend] Auth request starting. Route=%s Username=%s Url=%s"), *RoutePath, *TrimmedUsername, *LoginUrl);
 
     TSharedRef<IHttpRequest, ESPMode::ThreadSafe> Request = FHttpModule::Get().CreateRequest();
     Request->SetURL(LoginUrl);
     Request->SetVerb(TEXT("POST"));
     Request->SetHeader(TEXT("Content-Type"), TEXT("application/json"));
-    Request->SetContentAsString(FString::Printf(TEXT("{\"username\":\"%s\"}"), *TrimmedUsername.ReplaceCharWithEscapedChar()));
+    if (TrimmedPassword.IsEmpty())
+    {
+        Request->SetContentAsString(FString::Printf(TEXT("{\"username\":\"%s\"}"), *TrimmedUsername.ReplaceCharWithEscapedChar()));
+    }
+    else
+    {
+        Request->SetContentAsString(FString::Printf(
+            TEXT("{\"username\":\"%s\",\"password\":\"%s\"}"),
+            *TrimmedUsername.ReplaceCharWithEscapedChar(),
+            *TrimmedPassword.ReplaceCharWithEscapedChar()));
+    }
 
     Request->OnProcessRequestComplete().BindLambda(
-        [this](FHttpRequestPtr HttpRequest, FHttpResponsePtr Response, bool bWasSuccessful)
+        [this, bRememberMe](FHttpRequestPtr HttpRequest, FHttpResponsePtr Response, bool bWasSuccessful)
         {
             if (!bWasSuccessful || !Response.IsValid())
             {
@@ -409,34 +569,12 @@ void UMOBAMMOBackendSubsystem::RunLoginRequest(const FString& Username)
                 return;
             }
 
-            FBackendLoginResult Result;
-            Result.AccountId = JsonObject->GetStringField(TEXT("accountId"));
-            Result.Token = JsonObject->GetStringField(TEXT("token"));
-            Result.Username = JsonObject->GetStringField(TEXT("username"));
-
-            LastAccountId = Result.AccountId;
-            LastAuthToken = Result.Token;
-            UE_LOG(LogTemp, Log, TEXT("[Backend] Login succeeded. AccountId=%s Username=%s"), *Result.AccountId, *Result.Username);
-
-            RunOnGameThread([this, Result]()
-            {
-                LoginStatus = TEXT("Succeeded");
-                bManualCharacterFlowPending = ShouldUseManualCharacterFlow();
-                bCharacterFlowActionAuthorized = false;
-                bMainMenuVisible = false;
-                bCharacterSelectRequested = bManualCharacterFlowPending;
-                NotifyDebugStateChanged();
-                OnLoginSucceeded.Broadcast(Result);
-                if (bManualCharacterFlowPending)
-                {
-                    ListCharacters(Result.AccountId);
-                }
-            });
+            HandleAuthSessionResponse(JsonObject, bRememberMe);
         }
     );
 
     const bool bRequestStarted = Request->ProcessRequest();
-    UE_LOG(LogTemp, Log, TEXT("[Backend] MockLogin ProcessRequest returned %s"), bRequestStarted ? TEXT("true") : TEXT("false"));
+    UE_LOG(LogTemp, Log, TEXT("[Backend] Auth ProcessRequest returned %s"), bRequestStarted ? TEXT("true") : TEXT("false"));
     if (!bRequestStarted)
     {
         LastErrorMessage = TEXT("Login istegi baslatilamadi.");
@@ -444,6 +582,198 @@ void UMOBAMMOBackendSubsystem::RunLoginRequest(const FString& Username)
         NotifyDebugStateChanged();
         OnLoginFailed.Broadcast(TEXT("Login istegi baslatilamadi."));
     }
+}
+
+FString UMOBAMMOBackendSubsystem::GetPersistedAuthSessionPath() const
+{
+    return FPaths::Combine(FPaths::ProjectSavedDir(), TEXT("Auth"), TEXT("session.json"));
+}
+
+bool UMOBAMMOBackendSubsystem::LoadPersistedAuthSession(FString& OutRefreshToken, FString& OutUsername, FString& OutAccountId) const
+{
+    OutRefreshToken.Reset();
+    OutUsername.Reset();
+    OutAccountId.Reset();
+
+    FString Payload;
+    if (!FFileHelper::LoadFileToString(Payload, *GetPersistedAuthSessionPath()))
+    {
+        return false;
+    }
+
+    TSharedPtr<FJsonObject> JsonObject;
+    TSharedRef<TJsonReader<>> Reader = TJsonReaderFactory<>::Create(Payload);
+    if (!FJsonSerializer::Deserialize(Reader, JsonObject) || !JsonObject.IsValid())
+    {
+        return false;
+    }
+
+    bool bRememberMe = false;
+    JsonObject->TryGetBoolField(TEXT("rememberMe"), bRememberMe);
+    JsonObject->TryGetStringField(TEXT("refreshToken"), OutRefreshToken);
+    JsonObject->TryGetStringField(TEXT("username"), OutUsername);
+    JsonObject->TryGetStringField(TEXT("accountId"), OutAccountId);
+    OutRefreshToken = OutRefreshToken.TrimStartAndEnd();
+    return bRememberMe && !OutRefreshToken.IsEmpty();
+}
+
+void UMOBAMMOBackendSubsystem::SavePersistedAuthSession(const FString& RefreshToken, const FString& Username, const FString& AccountId) const
+{
+    const FString TrimmedRefreshToken = RefreshToken.TrimStartAndEnd();
+    if (TrimmedRefreshToken.IsEmpty())
+    {
+        ClearPersistedAuthSession();
+        return;
+    }
+
+    TSharedRef<FJsonObject> JsonObject = MakeShared<FJsonObject>();
+    JsonObject->SetBoolField(TEXT("rememberMe"), true);
+    JsonObject->SetStringField(TEXT("refreshToken"), TrimmedRefreshToken);
+    JsonObject->SetStringField(TEXT("username"), Username);
+    JsonObject->SetStringField(TEXT("accountId"), AccountId);
+    JsonObject->SetStringField(TEXT("role"), LastAccountRole);
+    JsonObject->SetStringField(TEXT("savedAtUtc"), FDateTime::UtcNow().ToIso8601());
+
+    FString Payload;
+    TSharedRef<TJsonWriter<>> Writer = TJsonWriterFactory<>::Create(&Payload);
+    if (!FJsonSerializer::Serialize(JsonObject, Writer))
+    {
+        return;
+    }
+
+    const FString PersistedPath = GetPersistedAuthSessionPath();
+    IFileManager::Get().MakeDirectory(*FPaths::GetPath(PersistedPath), true);
+    FFileHelper::SaveStringToFile(Payload, *PersistedPath);
+}
+
+void UMOBAMMOBackendSubsystem::ClearPersistedAuthSession() const
+{
+    IFileManager::Get().Delete(*GetPersistedAuthSessionPath(), false, true, true);
+}
+
+void UMOBAMMOBackendSubsystem::HandleAuthSessionResponse(const TSharedPtr<FJsonObject>& JsonObject, bool bRememberMe)
+{
+    if (!JsonObject.IsValid())
+    {
+        RunOnGameThread([this]()
+        {
+            LastErrorMessage = TEXT("Auth yaniti eksik veya gecersiz.");
+            LoginStatus = TEXT("Failed");
+            NotifyDebugStateChanged();
+            OnLoginFailed.Broadcast(LastErrorMessage);
+        });
+        return;
+    }
+
+    FBackendLoginResult Result;
+    JsonObject->TryGetStringField(TEXT("accountId"), Result.AccountId);
+    JsonObject->TryGetStringField(TEXT("token"), Result.Token);
+    if (Result.Token.IsEmpty())
+    {
+        JsonObject->TryGetStringField(TEXT("accessToken"), Result.Token);
+    }
+    JsonObject->TryGetStringField(TEXT("refreshToken"), Result.RefreshToken);
+    JsonObject->TryGetStringField(TEXT("username"), Result.Username);
+    JsonObject->TryGetStringField(TEXT("role"), Result.Role);
+    if (Result.RefreshToken.IsEmpty() && !LastRefreshToken.IsEmpty())
+    {
+        Result.RefreshToken = LastRefreshToken;
+    }
+    if (Result.Username.IsEmpty() && !LastUsername.IsEmpty())
+    {
+        Result.Username = LastUsername;
+    }
+    if (Result.Role.IsEmpty())
+    {
+        Result.Role = TEXT("player");
+    }
+
+    if (Result.AccountId.IsEmpty() || Result.Token.IsEmpty())
+    {
+        RunOnGameThread([this]()
+        {
+            LastErrorMessage = TEXT("Auth yanitinda account veya token eksik.");
+            LoginStatus = TEXT("Failed");
+            NotifyDebugStateChanged();
+            OnLoginFailed.Broadcast(LastErrorMessage);
+        });
+        return;
+    }
+
+    LastAccountId = Result.AccountId;
+    LastAuthToken = Result.Token;
+    LastRefreshToken = Result.RefreshToken;
+    LastUsername = Result.Username;
+    LastAccountRole = Result.Role;
+    bPersistRefreshToken = bRememberMe;
+    if (bRememberMe)
+    {
+        SavePersistedAuthSession(Result.RefreshToken, Result.Username, Result.AccountId);
+    }
+    else
+    {
+        ClearPersistedAuthSession();
+    }
+    UE_LOG(LogTemp, Log, TEXT("[Backend] Auth succeeded. AccountId=%s Username=%s Refresh=%s"),
+        *Result.AccountId,
+        *Result.Username,
+        Result.RefreshToken.IsEmpty() ? TEXT("no") : TEXT("yes"));
+
+    RunOnGameThread([this, Result]()
+    {
+        LoginStatus = TEXT("Succeeded");
+        bManualCharacterFlowPending = ShouldUseManualCharacterFlow();
+        bCharacterFlowActionAuthorized = false;
+        bMainMenuVisible = false;
+        bCharacterSelectRequested = bManualCharacterFlowPending;
+        NotifyDebugStateChanged();
+        OnLoginSucceeded.Broadcast(Result);
+        if (bManualCharacterFlowPending)
+        {
+            ListCharacters(Result.AccountId);
+        }
+    });
+}
+
+void UMOBAMMOBackendSubsystem::RunLogoutRequest()
+{
+    const FString RefreshToken = LastRefreshToken.TrimStartAndEnd();
+    if (!RefreshToken.IsEmpty())
+    {
+        TSharedRef<IHttpRequest, ESPMode::ThreadSafe> Request = FHttpModule::Get().CreateRequest();
+        Request->SetURL(BuildUrl(TEXT("/auth/logout")));
+        Request->SetVerb(TEXT("POST"));
+        Request->SetHeader(TEXT("Content-Type"), TEXT("application/json"));
+        Request->SetContentAsString(FString::Printf(TEXT("{\"refreshToken\":\"%s\"}"), *RefreshToken.ReplaceCharWithEscapedChar()));
+        Request->ProcessRequest();
+    }
+
+    LastAccountId.Reset();
+    LastAuthToken.Reset();
+    LastRefreshToken.Reset();
+    bPersistRefreshToken = false;
+    ClearPersistedAuthSession();
+    LastAccountRole.Reset();
+    LastCharacterId.Reset();
+    SelectedCharacterId.Reset();
+    CachedCharacters.Reset();
+    LastSessionConnectString.Reset();
+    LastSessionResult = FBackendSessionResult();
+    LastErrorMessage.Reset();
+    LastSaveErrorMessage.Reset();
+    LoginStatus = TEXT("Idle");
+    CharacterListStatus = TEXT("Idle");
+    CharacterStatus = TEXT("Idle");
+    SessionStatus = TEXT("Idle");
+    SaveStatus = TEXT("Idle");
+    bManualCharacterFlowPending = false;
+    bCharacterFlowActionAuthorized = false;
+    bMainMenuVisible = false;
+    bCharacterSelectRequested = false;
+    bSaveConnectionHealthy = true;
+    bReconnectTravelPending = false;
+    PendingReconnectPlayerController.Reset();
+    NotifyDebugStateChanged();
 }
 
 void UMOBAMMOBackendSubsystem::CreateCharacter(const FString& AccountId, const FString& CharacterName, const FString& ClassId, int32 PresetId, int32 ColorIndex, int32 Shade, int32 Transparent, int32 TextureDetail)

@@ -156,7 +156,12 @@ export async function saveCharacterState(
   });
 
   if (!character) {
-    recordPersistenceEvent("rejected");
+    recordPersistenceEvent("rejected", {
+      characterId,
+      statusCode: 404,
+      errorCode: "character_not_found",
+      message: "Save rejected because character was not found.",
+    });
     return {
       code: 404,
       body: {
@@ -167,7 +172,12 @@ export async function saveCharacterState(
   }
 
   if (options.accountId && character.accountId !== options.accountId) {
-    recordPersistenceEvent("rejected");
+    recordPersistenceEvent("rejected", {
+      characterId: character.id,
+      statusCode: 403,
+      errorCode: PERSISTENCE_ERROR.CHARACTER_OWNER_MISMATCH,
+      message: "Save rejected because account does not own character.",
+    });
     return {
       code: 403,
       body: {
@@ -180,7 +190,12 @@ export async function saveCharacterState(
 
   const sessionId = body.sessionId?.trim();
   if (!sessionId) {
-    recordPersistenceEvent("rejected");
+    recordPersistenceEvent("rejected", {
+      characterId: character.id,
+      statusCode: 401,
+      errorCode: PERSISTENCE_ERROR.SESSION_ID_REQUIRED,
+      message: "Save rejected because sessionId is missing.",
+    });
     return {
       code: 401,
       body: {
@@ -195,7 +210,17 @@ export async function saveCharacterState(
     character.activeSession.id !== sessionId ||
     character.activeSession.status !== SESSION_STATUS.ACTIVE
   ) {
-    recordPersistenceEvent("rejected");
+    recordPersistenceEvent("rejected", {
+      characterId: character.id,
+      sessionId,
+      statusCode: 409,
+      errorCode: PERSISTENCE_ERROR.STALE_OR_INVALID_SESSION,
+      message: "Save rejected because session is stale or invalid.",
+      metadata: {
+        currentSessionId: character.activeSession?.id ?? null,
+        currentSessionStatus: character.activeSession?.status ?? null,
+      },
+    });
     return {
       code: 409,
       body: {
@@ -220,7 +245,17 @@ export async function saveCharacterState(
       },
     });
 
-    recordPersistenceEvent("timedOut");
+    recordPersistenceEvent("timedOut", {
+      characterId: character.id,
+      sessionId,
+      statusCode: 409,
+      errorCode: PERSISTENCE_ERROR.SESSION_EXPIRED,
+      message: "Save rejected because session timed out.",
+      metadata: {
+        sessionLastSeenAt: character.activeSession.updatedAt.toISOString(),
+        sessionTimeoutSeconds: Math.round(sessionTimeoutMs / 1000),
+      },
+    });
     return {
       code: 409,
       body: {
@@ -242,7 +277,13 @@ export async function saveCharacterState(
   };
   const { error: positionError, position } = resolveSavePosition(body, currentPosition);
   if (positionError) {
-    recordPersistenceEvent("rejected");
+    recordPersistenceEvent("rejected", {
+      characterId: character.id,
+      sessionId,
+      statusCode: 400,
+      errorCode: positionError,
+      message: "Save rejected because position is invalid.",
+    });
     return {
       code: 400,
       body: {
@@ -272,7 +313,17 @@ export async function saveCharacterState(
   const isRespawnOrDeathSave = deathCount > existingDeathCount;
   const isArenaCorrectionSave = !isInsideArenaBounds(currentPosition) && isInsideArenaBounds(position);
   if (!isRespawnOrDeathSave && !isArenaCorrectionSave && movementDistance > movementAllowance) {
-    recordPersistenceEvent("rejected");
+    recordPersistenceEvent("rejected", {
+      characterId: character.id,
+      sessionId,
+      statusCode: 422,
+      errorCode: "position_delta_too_large",
+      message: "Save rejected because movement delta is too large.",
+      metadata: {
+        movementAllowance: Math.round(movementAllowance),
+        movementDistance: Math.round(movementDistance),
+      },
+    });
     return {
       code: 422,
       body: {
@@ -288,7 +339,16 @@ export async function saveCharacterState(
   }
 
   if (incomingSaveSequence < character.saveSequence) {
-    recordPersistenceEvent("staleIgnored");
+    recordPersistenceEvent("staleIgnored", {
+      characterId: character.id,
+      sessionId,
+      statusCode: 202,
+      message: "Save ignored because a newer sequence is already stored.",
+      metadata: {
+        currentSaveSequence: character.saveSequence.toString(),
+        incomingSaveSequence: incomingSaveSequence.toString(),
+      },
+    });
     return {
       code: 202,
       body: {
@@ -373,9 +433,23 @@ export async function saveCharacterState(
 
   await prisma.$transaction(transactionOps);
 
-  recordPersistenceEvent("saveAccepted");
+  recordPersistenceEvent("saveAccepted", {
+    characterId: character.id,
+    sessionId,
+    statusCode: 202,
+    message: options.endSession ? "Final save accepted." : "Save accepted.",
+    metadata: {
+      saveSequence: incomingSaveSequence.toString(),
+      endedSession: options.endSession === true,
+    },
+  });
   if (options.endSession) {
-    recordPersistenceEvent("sessionEnded");
+    recordPersistenceEvent("sessionEnded", {
+      characterId: character.id,
+      sessionId,
+      statusCode: 202,
+      message: "Session ended after final save.",
+    });
   }
 
   return {

@@ -929,6 +929,7 @@ void AMOBAMMOPlayerState::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& 
     Super::GetLifetimeReplicatedProps(OutLifetimeProps);
 
     // --- Visible to ALL clients (nameplate, health bar, scoreboard, appearance) ---
+    DOREPLIFETIME(AMOBAMMOPlayerState, Faction);
     DOREPLIFETIME(AMOBAMMOPlayerState, CharacterId);
     DOREPLIFETIME(AMOBAMMOPlayerState, CharacterName);
     DOREPLIFETIME(AMOBAMMOPlayerState, ClassId);
@@ -988,6 +989,49 @@ void AMOBAMMOPlayerState::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& 
 
     // --- Owner-only: active status effects (buff/debuff display) ---
     DOREPLIFETIME_CONDITION(AMOBAMMOPlayerState, ActiveStatusEffects,             COND_OwnerOnly);
+
+    // --- Owner-only: current zone (HUD zone label) ---
+    DOREPLIFETIME_CONDITION(AMOBAMMOPlayerState, CurrentZoneId,                   COND_OwnerOnly);
+}
+
+// ─────────────────────────────────────────────────────────────
+// Zone
+// ─────────────────────────────────────────────────────────────
+
+void AMOBAMMOPlayerState::SetCurrentZoneId(FName NewZoneId)
+{
+    if (CurrentZoneId == NewZoneId)
+    {
+        return;
+    }
+    CurrentZoneId = NewZoneId;
+    ForceNetUpdate();
+    BroadcastStateUpdated();
+}
+
+void AMOBAMMOPlayerState::OnRep_ZoneId()
+{
+    BroadcastStateUpdated();
+}
+
+// ─────────────────────────────────────────────────────────────
+// Faction
+// ─────────────────────────────────────────────────────────────
+
+void AMOBAMMOPlayerState::SetFaction(EMOBAMMOFaction NewFaction)
+{
+    if (Faction == NewFaction)
+    {
+        return;
+    }
+    Faction = NewFaction;
+    ForceNetUpdate();
+    BroadcastStateUpdated();
+}
+
+void AMOBAMMOPlayerState::OnRep_Faction()
+{
+    BroadcastStateUpdated();
 }
 
 void AMOBAMMOPlayerState::OnRep_PlayerIdentity()

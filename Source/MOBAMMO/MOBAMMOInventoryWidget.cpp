@@ -1,4 +1,5 @@
 #include "MOBAMMOInventoryWidget.h"
+#include "MOBAMMOPlayerController.h"
 #include "MOBAMMOPlayerState.h"
 #include "Components/VerticalBox.h"
 #include "Components/VerticalBoxSlot.h"
@@ -19,6 +20,8 @@
 #include "Components/CanvasPanelSlot.h"
 #include "Fonts/SlateFontInfo.h"
 #include "Blueprint/WidgetTree.h"
+#include "Input/Reply.h"
+#include "InputCoreTypes.h"
 
 namespace InvColors
 {
@@ -96,6 +99,21 @@ void UMOBAMMOInventoryWidget::ToggleVisibility()
         TargetFadeAlpha = 0.0f;
         HideTooltip();
     }
+}
+
+FReply UMOBAMMOInventoryWidget::NativeOnMouseButtonDown(const FGeometry& InGeometry, const FPointerEvent& InMouseEvent)
+{
+    if (bIsVisible && InMouseEvent.GetEffectingButton() == EKeys::RightMouseButton)
+    {
+        int32 SlotIndex = INDEX_NONE;
+        if (TryResolveSlotUnderCursor(InMouseEvent.GetScreenSpacePosition(), SlotIndex))
+        {
+            UseVisibleInventorySlot(SlotIndex);
+            return FReply::Handled();
+        }
+    }
+
+    return Super::NativeOnMouseButtonDown(InGeometry, InMouseEvent);
 }
 
 void UMOBAMMOInventoryWidget::BuildLayout()
@@ -328,7 +346,7 @@ void UMOBAMMOInventoryWidget::BuildFooter(UVerticalBox* Parent)
     UHorizontalBox* Row = WidgetTree->ConstructWidget<UHorizontalBox>(UHorizontalBox::StaticClass());
     FooterBg->AddChild(Row);
 
-    HintText = MakeText(WidgetTree, TEXT("[I] Close   [8] Grant   [9] Use Potion   [0] Equip Cycle"), 10, InvColors::TextSecondary);
+    HintText = MakeText(WidgetTree, TEXT("[I] Close   Right Click: Use/Equip   [8] Grant   [9] Use Potion   [0] Equip Cycle"), 10, InvColors::TextSecondary);
     if (UHorizontalBoxSlot* S = Row->AddChildToHorizontalBox(HintText))
     {
         S->SetSize(ESlateSizeRule::Fill);
@@ -361,6 +379,54 @@ void UMOBAMMOInventoryWidget::BindToPlayerState()
 void UMOBAMMOInventoryWidget::HandlePlayerStateUpdated()
 {
     if (bIsVisible) RefreshInventory();
+}
+
+bool UMOBAMMOInventoryWidget::TryResolveSlotUnderCursor(const FVector2D& ScreenPosition, int32& OutSlotIndex) const
+{
+    OutSlotIndex = INDEX_NONE;
+
+    for (int32 i = 0; i < SlotBorders.Num(); ++i)
+    {
+        const UBorder* SlotBorder = SlotBorders[i];
+        if (!SlotBorder)
+        {
+            continue;
+        }
+
+        if (SlotBorder->GetCachedGeometry().IsUnderLocation(ScreenPosition))
+        {
+            OutSlotIndex = i;
+            return true;
+        }
+    }
+
+    return false;
+}
+
+void UMOBAMMOInventoryWidget::UseVisibleInventorySlot(int32 SlotIndex)
+{
+    APlayerController* PC = GetOwningPlayer();
+    if (!PC)
+    {
+        return;
+    }
+
+    const AMOBAMMOPlayerState* PS = PC->GetPlayerState<AMOBAMMOPlayerState>();
+    if (!PS)
+    {
+        return;
+    }
+
+    const TArray<FMOBAMMOInventoryItem>& Items = PS->GetInventoryItems();
+    if (!Items.IsValidIndex(SlotIndex))
+    {
+        return;
+    }
+
+    if (AMOBAMMOPlayerController* MOBAController = Cast<AMOBAMMOPlayerController>(PC))
+    {
+        MOBAController->RequestUseInventoryItem(Items[SlotIndex].ItemId);
+    }
 }
 
 void UMOBAMMOInventoryWidget::RefreshInventory()

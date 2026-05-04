@@ -2,7 +2,9 @@
 
 #include "CoreMinimal.h"
 #include "GameFramework/GameMode.h"
+#include "MOBAMMOFactionTypes.h"
 #include "MOBAMMOQuestTypes.h"
+#include "MOBAMMOZoneTypes.h"
 
 #include "MOBAMMOGameMode.generated.h"
 
@@ -20,11 +22,13 @@ class MOBAMMO_API AMOBAMMOGameMode : public AGameMode
 public:
     AMOBAMMOGameMode();
 
+    virtual void BeginPlay() override;
     virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
     virtual FString InitNewPlayer(APlayerController* NewPlayerController, const FUniqueNetIdRepl& UniqueId, const FString& Options, const FString& Portal) override;
     virtual void PostLogin(APlayerController* NewPlayer) override;
     virtual void Logout(AController* Exiting) override;
     virtual void RestartPlayer(AController* NewPlayer) override;
+    virtual AActor* ChoosePlayerStart_Implementation(AController* Player) override;
 
     UFUNCTION(BlueprintCallable, Category="MOBAMMO|Gameplay")
     bool ApplyDamageToPlayer(AController* TargetController, float Amount);
@@ -57,6 +61,9 @@ public:
     bool UseFirstInventoryConsumable(AController* InstigatorController);
 
     UFUNCTION(BlueprintCallable, Category="MOBAMMO|Inventory")
+    bool UseInventoryItem(AController* InstigatorController, const FString& ItemId);
+
+    UFUNCTION(BlueprintCallable, Category="MOBAMMO|Inventory")
     bool ToggleEquipFirstInventoryItem(AController* InstigatorController);
 
     UFUNCTION(BlueprintCallable, Category="MOBAMMO|Debug")
@@ -68,6 +75,54 @@ public:
     // Skill point spending — called by server RPC in PlayerController.
     UFUNCTION(BlueprintCallable, Category="MOBAMMO|Skills")
     bool HandleSpendSkillPoint(AController* Controller, int32 AbilitySlotIndex);
+
+    // ── Zone System ────────────────────────────────────────────────────────
+    // Called by AMOBAMMOZoneVolume when a player character enters a zone.
+    // Updates the player's CurrentZoneId and pushes a combat-log entry.
+    UFUNCTION(BlueprintCallable, Category="MOBAMMO|Zone")
+    void HandlePlayerEnteredZone(AController* Controller, const FMOBAMMOZoneInfo& ZoneInfo);
+
+    // Called by AMOBAMMOZoneVolume when a player character leaves a zone.
+    // Clears the player's CurrentZoneId (sets to NAME_None).
+    UFUNCTION(BlueprintCallable, Category="MOBAMMO|Zone")
+    void HandlePlayerExitedZone(AController* Controller, FName ZoneId);
+
+    // Returns the best available spawn point for the given zone.
+    // Falls back to zone NAME_None (global defaults) then to nullptr.
+    UFUNCTION(BlueprintPure, Category="MOBAMMO|Zone")
+    AActor* FindBestSpawnPointForZone(FName ZoneId) const;
+
+    // Returns the zone a controller's player is currently in (NAME_None if none).
+    UFUNCTION(BlueprintPure, Category="MOBAMMO|Zone")
+    FName GetControllerCurrentZone(const AController* Controller) const;
+
+    // ── Faction helpers ────────────────────────────────────────────────────
+    // Returns the faction of any actor (player, AI, or unknown → Neutral).
+    UFUNCTION(BlueprintPure, Category="MOBAMMO|Faction")
+    EMOBAMMOFaction GetActorFaction(const AActor* Actor) const;
+
+    // Returns true when the two actors belong to factions that can harm each other.
+    // Allied–Allied  → false   Hostile–Allied → true   *–Neutral → true
+    UFUNCTION(BlueprintPure, Category="MOBAMMO|Faction")
+    bool AreActorsHostile(const AActor* ActorA, const AActor* ActorB) const;
+
+    // Convenience: given an instigator controller and a target actor, is the
+    // target hostile to the instigator's pawn?
+    UFUNCTION(BlueprintPure, Category="MOBAMMO|Faction")
+    bool IsValidDamageTarget(const AController* InstigatorController, const AActor* Target) const;
+
+    // Called by MobSpawner (and any other AI system) when an enemy is killed.
+    // Routes XP / gold rewards and quest progress to the killer.
+    UFUNCTION(BlueprintCallable, Category="MOBAMMO|Gameplay")
+    void NotifyEnemyKilled(AController* KillerController, int32 XP, int32 Gold,
+                           const FString& EnemyName, EMOBAMMOQuestType QuestType);
+
+    // Called by AMOBAMMOLootDropActor when a player walks into a pickup.
+    // Grants the item to the player's inventory and logs the pickup.
+    // Returns true if the grant succeeded (player had a valid active session).
+    UFUNCTION(BlueprintCallable, Category="MOBAMMO|Inventory")
+    bool GrantLootPickup(AController* PlayerController, const FString& ItemId,
+                         int32 Quantity, const FString& SourceName);
 
 private:
     void UpdateConnectedPlayerCount();
@@ -213,6 +268,12 @@ private:
     float ArenaSafetyCheckInterval = 0.25f;
 
     TMap<APlayerController*, FString> PendingSessionOptionsByController;
+
+    // Collected on BeginPlay; sorted by Priority for fast zone-based lookup.
+    UPROPERTY(Transient)
+    TArray<TObjectPtr<class AMOBAMMOSpawnPoint>> RegisteredSpawnPoints;
+
+    void CollectSpawnPoints();
 
     UPROPERTY(EditDefaultsOnly, Category="MOBAMMO|Training")
     FVector TrainingDummySpawnLocation = FVector(520.0f, 360.0f, 140.0f);

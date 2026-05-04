@@ -1,5 +1,5 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
-import { createHmac, timingSafeEqual } from "node:crypto";
+import { createHash, createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 
 import { PERSISTENCE_ERROR } from "../persistence/contracts.js";
 import { recordPersistenceEvent } from "../persistence/telemetry.js";
@@ -17,7 +17,7 @@ export interface AuthPrincipal {
   accountId?: string;
 }
 
-function extractBearerToken(request: FastifyRequest): string | null {
+export function extractBearerToken(request: FastifyRequest): string | null {
   const header = request.headers.authorization;
   if (!header) {
     return null;
@@ -53,10 +53,16 @@ function isSafeEqual(left: string, right: string): boolean {
   return leftBuffer.length === rightBuffer.length && timingSafeEqual(leftBuffer, rightBuffer);
 }
 
-function readHeaderValue(request: FastifyRequest, headerName: string): string {
+export function readHeaderValue(request: FastifyRequest, headerName: string): string {
   const header = request.headers[headerName.toLowerCase()];
   const value = Array.isArray(header) ? header[0] : header;
   return value?.trim() ?? "";
+}
+
+export function safeStringEquals(left: string, right: string): boolean {
+  const leftBuffer = Buffer.from(left, "utf8");
+  const rightBuffer = Buffer.from(right, "utf8");
+  return leftBuffer.length === rightBuffer.length && timingSafeEqual(leftBuffer, rightBuffer);
 }
 
 export function createAuthToken(accountId: string, secret: string, ttlSeconds: number, now = new Date()): string {
@@ -108,6 +114,14 @@ export function verifyAuthToken(token: string, secret: string, now = new Date())
   }
 }
 
+export function createRefreshToken(): string {
+  return randomBytes(48).toString("base64url");
+}
+
+export function hashRefreshToken(token: string): string {
+  return createHash("sha256").update(token).digest("base64url");
+}
+
 export async function requireAuthenticatedAccountId(
   app: FastifyInstance,
   request: FastifyRequest,
@@ -151,18 +165,88 @@ export function requireSessionServerSecret(
   request: FastifyRequest,
   reply: FastifyReply,
 ): boolean {
+  if (isSessionServerSecretAccepted(app, request)) {
+    return true;
+  }
+
+  recordPersistenceEvent("rejected");
+  reply.code(401).send({
+    error: PERSISTENCE_ERROR.AUTH_REQUIRED,
+    message: "Bu islem icin gecerli session server secret gereklidir.",
+  });
+  return false;
+}
+
+export function isSessionServerSecretAccepted(app: FastifyInstance, request: FastifyRequest): boolean {
   const incomingSecret = readHeaderValue(request, "x-session-server-secret");
-  const expectedSecret = app.appConfig.sessionServerSecret.trim();
-  if (!incomingSecret || !expectedSecret || incomingSecret !== expectedSecret) {
+  const acceptedSecrets = [
+    app.appConfig.sessionServerSecret,
+    ...app.appConfig.previousSessionServerSecrets,
+  ]
+    .map((secret) => secret.trim())
+    .filter((secret) => secret.length > 0);
+
+  return Boolean(incomingSecret)
+    && acceptedSecrets.some((acceptedSecret) => safeStringEquals(incomingSecret, acceptedSecret));
+}
+
+export function isOpsAdminSecretAccepted(app: FastifyInstance, request: FastifyRequest): boolean {
+  const configuredSecret = app.appConfig.opsAdminSecret.trim();
+  const incomingSecret = readHeaderValue(request, "x-ops-admin-secret");
+  return Boolean(configuredSecret) && Boolean(incomingSecret) && safeStringEquals(incomingSecret, configuredSecret);
+}
+
+export async function isOpsAdminAccountAccepted(app: FastifyInstance, request: FastifyRequest): Promise<boolean> {
+  const token = extractBearerToken(request);
+  const accountId = token ? verifyAuthToken(token, app.appConfig.authTokenSecret) : null;
+  if (!accountId) {
+    return false;
+  }
+
+  const account = await app.prisma.account.findUnique({
+    where: {
+      id: accountId,
+    },
+    select: {
+      role: true,
+    },
+  });
+
+  return account?.role === "admin";
+}
+
+export async function isOpsAdminAccessAccepted(app: FastifyInstance, request: FastifyRequest): Promise<boolean> {
+  return isOpsAdminSecretAccepted(app, request) || await isOpsAdminAccountAccepted(app, request);
+}
+
+export async function requireOpsAdminSecret(app: FastifyInstance, request: FastifyRequest, reply: FastifyReply): Promise<boolean> {
+  if (!app.appConfig.opsRequireAdminSecret || await isOpsAdminAccessAccepted(app, request)) {
+    return true;
+  }
+
+  recordPersistenceEvent("rejected");
+  reply.code(401).send({
+    error: PERSISTENCE_ERROR.AUTH_REQUIRED,
+    message: "Bu islem icin gecerli ops admin secret gereklidir.",
+  });
+  return false;
+}
+
+export async function requireOpsMutationSecret(app: FastifyInstance, request: FastifyRequest, reply: FastifyReply): Promise<boolean> {
+  if (await isOpsAdminAccessAccepted(app, request) || isSessionServerSecretAccepted(app, request)) {
+    return true;
+  }
+
+  if (app.appConfig.opsRequireAdminSecret) {
     recordPersistenceEvent("rejected");
     reply.code(401).send({
       error: PERSISTENCE_ERROR.AUTH_REQUIRED,
-      message: "Bu islem icin gecerli session server secret gereklidir.",
+      message: "Bu islem icin gecerli ops admin secret veya session server secret gereklidir.",
     });
     return false;
   }
 
-  return true;
+  return requireSessionServerSecret(app, request, reply);
 }
 
 export async function requirePersistencePrincipal(

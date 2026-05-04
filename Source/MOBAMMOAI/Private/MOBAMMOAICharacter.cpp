@@ -25,14 +25,17 @@ void AMOBAMMOAICharacter::BeginPlay()
 
 void AMOBAMMOAICharacter::OnDeath(UHealthComponent* HealthComp, AActor* InstigatorActor)
 {
-    // Basic death logic (ragdoll or animation)
+    // Basic death: disable collision, ragdoll the mesh, then self-destruct.
     GetCapsuleComponent()->SetCollisionEnabled(ECollisionEnabled::NoCollision);
-    
+
     if (USkeletalMeshComponent* MeshComp = GetMesh())
     {
         MeshComp->SetSimulatePhysics(true);
         MeshComp->SetCollisionProfileName(TEXT("Ragdoll"));
     }
 
-    SetLifeSpan(5.0f); // Delete after 5 seconds
+    SetLifeSpan(5.0f);
+
+    // Broadcast so MobSpawner (and any other listener) can award kills / respawn.
+    OnAIDied.Broadcast(this, InstigatorActor);
 }

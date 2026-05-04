@@ -7,6 +7,7 @@
 #include "MOBAMMOGameHUDWidget.generated.h"
 
 class UBorder;
+class UButton;
 class UCanvasPanel;
 class UCanvasPanelSlot;
 class UEditableTextBox;
@@ -39,6 +40,12 @@ public:
     void ToggleInventory();
 
     UFUNCTION(BlueprintCallable, Category="HUD")
+    void ToggleSkillPanel();
+
+    UFUNCTION(BlueprintCallable, Category="HUD")
+    void CloseSkillPanel();
+
+    UFUNCTION(BlueprintCallable, Category="HUD")
     void OpenChat();
 
     UFUNCTION(BlueprintCallable, Category="HUD")
@@ -49,6 +56,9 @@ public:
 
     UFUNCTION(BlueprintPure, Category="HUD")
     bool IsInventoryOpen() const;
+
+    UFUNCTION(BlueprintPure, Category="HUD")
+    bool IsSkillPanelOpen() const { return bSkillPanelOpen; }
 
     // Inventory
     UPROPERTY(Transient) TObjectPtr<UMOBAMMOInventoryWidget> InventoryWidget;
@@ -72,6 +82,7 @@ private:
     void BuildScoreBar(UCanvasPanel* Canvas);
     void BuildCenterNotifications(UCanvasPanel* Canvas);
     void BuildMinimap(UCanvasPanel* Canvas);
+    void BuildSkillPanel(UCanvasPanel* Canvas);
     void UpdateMinimap();
     void PlaceMinimapDot(UBorder* Dot, float WorldX, float WorldY) const;
     void BuildQuestPanel(UCanvasPanel* Canvas);
@@ -82,6 +93,7 @@ private:
     void BindToSubsystem(UMOBAMMOBackendSubsystem* BackendSubsystem);
     void BindToReplicatedState();
     void UpdateTexts();
+    void RefreshSkillPanel();
     void EnsureAbilityBarVisible();
 
     UBorder* MakeGlassPanel(const FLinearColor& Tint, float Alpha, float CornerRadius = 0.0f) const;
@@ -92,6 +104,14 @@ private:
 
     UFUNCTION()
     void HandleReplicatedStateChanged();
+
+    UFUNCTION() void HandleSkillSlot1Clicked();
+    UFUNCTION() void HandleSkillSlot2Clicked();
+    UFUNCTION() void HandleSkillSlot3Clicked();
+    UFUNCTION() void HandleSkillSlot4Clicked();
+    UFUNCTION() void HandleSkillSlot5Clicked();
+    UFUNCTION() void HandleSkillUpgradeClicked();
+    UFUNCTION() void HandleSkillPanelCloseClicked();
 
     // Root
     UPROPERTY(Transient) TObjectPtr<UCanvasPanel> RootCanvas;
@@ -151,6 +171,22 @@ private:
 
     // Status effects row (below mana bar in player frame)
     UPROPERTY(Transient) TObjectPtr<UTextBlock> StatusEffectText;
+
+    // Fullscreen skill tree overlay
+    UPROPERTY(Transient) TObjectPtr<UBorder> SkillPanelRoot;
+    UPROPERTY(Transient) TObjectPtr<UTextBlock> SkillPanelCharacterText;
+    UPROPERTY(Transient) TObjectPtr<UTextBlock> SkillPanelStatsText;
+    UPROPERTY(Transient) TObjectPtr<UTextBlock> SkillPanelPointsText;
+    UPROPERTY(Transient) TObjectPtr<UTextBlock> SkillPanelDetailTitleText;
+    UPROPERTY(Transient) TObjectPtr<UTextBlock> SkillPanelDetailRankText;
+    UPROPERTY(Transient) TObjectPtr<UTextBlock> SkillPanelDetailBodyText;
+    UPROPERTY(Transient) TObjectPtr<UTextBlock> SkillPanelUpgradeText;
+    UPROPERTY(Transient) TObjectPtr<UButton> SkillPanelUpgradeButton;
+    UPROPERTY(Transient) TArray<TObjectPtr<UButton>> SkillPanelNodeButtons;
+    UPROPERTY(Transient) TArray<TObjectPtr<UTextBlock>> SkillPanelNodeNameTexts;
+    UPROPERTY(Transient) TArray<TObjectPtr<UTextBlock>> SkillPanelNodeRankTexts;
+    bool bSkillPanelOpen = false;
+    int32 SelectedSkillPanelIndex = 0;
 
     // Floating damage text
     UPROPERTY(Transient) TObjectPtr<UTextBlock> FloatingFeedbackText;
